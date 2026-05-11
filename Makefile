@@ -37,6 +37,8 @@ build: ## Compile the binary locally.
 
 .PHONY: docker-build
 docker-build: ## Build the container image (pass IMG=...).
+	# Cross-compile natively on the host. The Dockerfile is now just a COPY + ENTRYPOINT.
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o bin/operator ./cmd/operator
 	docker build --platform linux/amd64 -t $(IMG) .
 
 .PHONY: docker-push
