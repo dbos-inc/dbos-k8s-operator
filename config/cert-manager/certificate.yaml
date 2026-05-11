@@ -1,0 +1,20 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: dbos-operator-serving-cert
+  namespace: dbos-operator
+spec:
+  # Stored in this Secret; mounted into the pod at /etc/dbos-operator/certs.
+  # The cert-manager cainjector also reads it to populate the APIService
+  # caBundle (see config/apiservice/apiservice.yaml).
+  secretName: dbos-operator-serving-cert
+  dnsNames:
+    - dbos-operator
+    - dbos-operator.dbos-operator
+    - dbos-operator.dbos-operator.svc
+    - dbos-operator.dbos-operator.svc.cluster.local
+  issuerRef:
+    name: dbos-operator-selfsigned
+    kind: Issuer
+  duration: 8760h    # 1 year
+  renewBefore: 720h  # 30 days

@@ -1,0 +1,18 @@
+# Default install overlay.
+#
+# Default flow assumes cert-manager is installed in the cluster (one-line
+# install: kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml).
+#
+# If you can't install cert-manager, comment out config/cert-manager and the
+# APIService resource here, then use the self-signed Makefile flow:
+#   make certs
+#   make deploy-self-signed-cert
+#   make deploy
+#   make deploy-self-signed-apiservice
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../manager
+  - ../rbac
+  - ../cert-manager
+  - ../apiservice

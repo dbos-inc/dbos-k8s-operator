@@ -1,0 +1,16 @@
+# Lets the operator read kube-system/extension-apiserver-authentication, which
+# holds the front-proxy CA bundle used to validate kube-apiserver→aggregated-API
+# requests. Required for any aggregated API.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dbos-operator-auth-reader
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: dbos-operator
+    namespace: dbos-operator

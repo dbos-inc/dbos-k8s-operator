@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dbos-operator
+  namespace: dbos-operator
+data:
+  config.yaml: |
+    # DBOS Kubernetes Metrics Operator config.
+    # Mounted into the pod at /etc/dbos-operator/config.yaml.
+    # Pod restart picks up edits (kustomize hashes the ConfigMap so apply triggers a rollout).
+    conductor:
+      orgName: max
+      jwtPath: /var/run/secrets/conductor/token
+      # endpoint: ""               # leave empty for DBOS-managed Conductor (cloud.dbos.dev)
+      # insecureSkipVerify: false  # only for local/dev clusters
+    poller:
+      interval: 1s
+      maxBackoff: 30s
+    apps:
+      - name: dbos-k8s-app
+        queues:
+          - taskQueue
+    metricsAPI:
+      enabled: true

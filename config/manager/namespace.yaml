@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dbos-operator
+  labels:
+    app.kubernetes.io/name: dbos-operator
+    app.kubernetes.io/managed-by: kustomize

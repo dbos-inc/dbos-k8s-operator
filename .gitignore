@@ -1,0 +1,6 @@
+bin/
+hack/certs/
+*.test
+*.out
+.idea/
+.vscode/

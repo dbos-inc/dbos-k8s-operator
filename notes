@@ -1,0 +1,108 @@
+To do/explore
+* Versions
+* HPA per version
+* Simpler autoscaler (1 metric for all queues of an application)
+* Conductor machine accounts
+    --> Should we do RBAC first?
+* Tests
+    * Kind / GHA for e2e testing
+    * Add testing for timing edge cases:
+        * deployment time vs updating conductor time
+
+
+Paths to match app version <-> app image:
+    * ask user to spec version in the deployment manifest -- we can watch events and maintain a record in the operator (not durable)
+    * ask user to pass it in the executor metadata. Operator can get that from conductor, alongside the versions
+        * but by the time the new deployment is deployed, the executors will have disappeared -- so we must hope the executor record stays in the conductor DB
+    * Update conductor to store more info about executors, e.g., their specs, and add an endpoint that allows an in-cluster operator, e.g., k8s, to update executor info (e.g., k8s deployment specs)
+
+
+Versions:
+    * Deployment image <-> DBOS app version <-> actual specs mapping
+    * Must handle "reference" changes, e.g., user changes a secret used by v1 in v2, and v1 may or may not work anymore
+    * Reconciler loop:
+        * On deploys + periodically: pull all pending workflows, group by version, for old versions, pull deployment specs using pod template hash, then start deployment
+        * Top of the cherry: apply
+
+
+
+Update:
+I looked into managing multiple versions. The general idea is that the user would only have to manage a single deployment, for the latest version of their application, and the operator will manage deployments for all the old versions. It can figure out, by querying conductor, what versions still have pending workflows. The challenge is that it must also figure out what specs to use for each workflow version. There is a gap between k8s and conductor in the sense that the mapping app version <-> deployment specs isn't directly maintained.
+
+There's a few ways to do that, all with their pitfall:
+- Ask user to use the executor metadata field to specify their image hash.
+    * pros: easier for us!
+    * cons: terrible UX
+- Ask user to always specify an app version in their deployment manifest: the mapping is declared, but still isn't durable
+    * pros: easier-but-not-as-easier-than-the-previous-point for us
+    * cons: still terrible UX
+    --> Making it durable would mean, really having the operator write that down in Conductor's executor records (e.g; using the metadata field)
+- My preferred idea:
+    - add a new column to application_versions: "runtime metadata"
+    - add a new API to conductor for the operator to update this column
+    - When a deployment happens, the operator catches it and updates the latest version's runtime metadata
+    * Pros:
+        ** User doesn't have to care about versions, images, etc
+        ** Generalize to other runtimes (e.g., DBOS Cloud)
+
+
+
+
+- Lead is senior decision maker, but has even more senior management
+- Genuinely interested in DBOS. Followed us since late 2025. Came to UG, kicked the tires internally
+- Wants durable execution. Uses Temporal
+
+Eventually couldn't move with Conductor for a few reason. I'm quoting what he said but adding a translation:
+- Reluctant to get into a license agreement before proving the value of their own product
+    --> They want free stuff
+
+A core piece of his argument was that they'd much prefer be able to start with Open source conductor, potentially with a BSL, and be able to change the URL from "our free self hosted conductor" to "dbos-managed conductor" (the way they operate with Temporal)
+
+
+One interesting data point from Intuitive.cloud (Closed Lost now) which may apply to leads like Kyndril. That's a long convo so I generated a summary.
+
+Their business
+Provide managed infra / turn key solution for F10 - F50 companies. These guys seem to sell real stuff for lots of money to serious people.
+
+Timeline summary
+
+Aug–Sep 2025: Vyas initially explored DBOS while already using Temporal
+. Interested in durable execution, simplicity, and Postgres-native design.
+Sep 2025: Attended DBOS user group and started a POC. Early concerns emerged around operating without Conductor, self-hosting, and private-cloud deployments.
+Nov 2025: Team actively prototyping with DBOS for infrastructure provisioning workflows on Kubernetes. Reliability needs were emphasized over throughput. Management hesitant about external dependencies/licensing.
+Nov–Dec 2025: Interest increased after announcement of self-hosted/on-prem Conductor Docker images. Team evaluated internally but delayed deeper engagement.
+Jan–Feb 2026: Pilot work continued, but workshops/calls postponed due to delivery priorities.
+Mar 2026: Core concerns crystallized: Conductor licensing/commercial model, non-OSS status, and procurement friction for pre-revenue/internal tools. Team ultimately stayed on self-hosted Temporal.
+May 2026: Vyas confirmed final direction toward self-hosted Temporal, despite still preferring DBOS’s simpler architecture and Postgres-centric model.
+
+
+Vyas's arguments against moving forward with DBOS. I'm adding the "transalation" part under each point.
+
+- Conductor is not OSS, which leads to licensing/procurement friction for:
+    * MVPs
+    * pre-revenue projects
+    --> They can use trial keys. If not convenient, we could even make trial keys longer. Not the real issue imo.
+    
+- Enterprise management prefers:
+    * scrappy self-hosted OSS solutions first
+    * proving ROI before paying for licenses
+    --> They want free stuff to maximize their margin, move to licensing when build vs buy becomes net negative
+
+- Concern that DBOS always eventually requires:
+    * licensing discussions
+    * agreements with DBOS team
+    --> That's related to the previous point but inevitable for now. We want these discussions.
+
+My take aways:
+- We know we are looking for direct customers, not plumbers.
+- That might rule out Kyndril/Slalom/etc
+- In the longer term, we'll also have to revisit what we give for free, and how we give it, to keep growing.
+
+Vyas did suggest that DBOS licensing may hamper adoption overall, but I think he is biased because his business model has competing interests to ours, at our stage.
+
+Other points:
+- There was also a few comments about the Temporal ecosystem being stronger (larger community, broader ecosystem maturity, many AI agent SDK integrations already exist).
+--> We are doing great on that front, and that's totally normal for our profile.
+
+- Temporal UI perceived as better for business workflow visibility
+--> That's because they never tried Conductor, and indeed we don't make it easy for people to perceive we have a good UI

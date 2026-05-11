@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dbos-operator
+  namespace: dbos-operator
+  labels:
+    app.kubernetes.io/name: dbos-operator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dbos-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dbos-operator
+    spec:
+      serviceAccountName: dbos-operator
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: operator
+          # Override before deploying: make deploy IMG=...
+          image: 500883621673.dkr.ecr.us-east-1.amazonaws.com/dbos-operator:dev
+          imagePullPolicy: Always
+          args:
+            - --config=/etc/dbos-operator/config.yaml
+            - --secure-port=6443
+            # Use the cert-manager-issued files directly. Avoids the
+            # auto-generation path that wants to write into --cert-dir
+            # (which here is a read-only Secret mount).
+            - --tls-cert-file=/etc/dbos-operator/certs/tls.crt
+            - --tls-private-key-file=/etc/dbos-operator/certs/tls.key
+            - --v=2
+          env:
+            # Used by the Conductor client to construct the default base URL
+            # https://${DBOS_DOMAIN}/conductor/v1alpha1 when no explicit
+            # spec.conductor.endpoint is given in the operator config.
+            - name: DBOS_DOMAIN
+              value: cloud.dbos.dev
+          ports:
+            - name: metrics-api
+              containerPort: 6443
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: metrics-api
+              scheme: HTTPS   # kubelet probes skip cert verification on HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: metrics-api
+              scheme: HTTPS
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: config
+              mountPath: /etc/dbos-operator/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: conductor-jwt
+              mountPath: /var/run/secrets/conductor
+              readOnly: true
+            - name: serving-cert
+              mountPath: /etc/dbos-operator/certs
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: dbos-operator
+        - name: conductor-jwt
+          secret:
+            # Created by the operator user before first deploy:
+            #   kubectl -n dbos-operator create secret generic conductor-jwt --from-literal=token=<JWT>
+            secretName: conductor-jwt
+        - name: serving-cert
+          secret:
+            # Either populated by cert-manager (config/cert-manager/certificate.yaml)
+            # or by the self-signed fallback (`make certs && make deploy-self-signed-cert`).
+            # Must contain tls.crt and tls.key.
+            secretName: dbos-operator-serving-cert

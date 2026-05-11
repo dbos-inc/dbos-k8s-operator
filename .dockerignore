@@ -1,0 +1,10 @@
+bin/
+.git/
+.github/
+.dbos/
+.idea/
+.vscode/
+docs/
+hack/
+*.md
+*.test
