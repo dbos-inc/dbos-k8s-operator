@@ -4,3 +4,4 @@ resources:
   - auth_delegator.yaml
   - auth_reader.yaml
   - hpa_reader.yaml
+  - deployment_watcher.yaml

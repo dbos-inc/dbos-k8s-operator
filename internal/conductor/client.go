@@ -155,6 +155,83 @@ func (c *Client) QueueDepth(ctx context.Context, app, queue string) (int64, erro
 	return int64(len(out)), nil
 }
 
+// ApplicationVersion mirrors Conductor's ApplicationVersionOutput.
+type ApplicationVersion struct {
+	VersionID        string `json:"version_id"`
+	VersionName      string `json:"version_name"`
+	VersionTimestamp int64  `json:"version_timestamp"`
+	CreatedAt        int64  `json:"created_at"`
+}
+
+// ListApplicationVersions returns every version Conductor has on record for
+// app. Sorted by version_timestamp DESC per Conductor's contract (so index 0
+// is the latest), but callers should not rely on sort order — the
+// LatestApplicationVersion helper below picks by timestamp explicitly.
+//
+//	GET <base>/api/<orgName>/applications/<app>/versions
+func (c *Client) ListApplicationVersions(ctx context.Context, app string) ([]ApplicationVersion, error) {
+	path := fmt.Sprintf("/api/%s/applications/%s/versions",
+		url.PathEscape(c.orgName), url.PathEscape(app))
+	var out []ApplicationVersion
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, fmt.Errorf("ListApplicationVersions %s: %w", app, err)
+	}
+	return out, nil
+}
+
+// LatestApplicationVersion returns the version with the highest
+// version_timestamp. Returns a zero-value ApplicationVersion and an error if
+// the app has no registered versions yet.
+func (c *Client) LatestApplicationVersion(ctx context.Context, app string) (ApplicationVersion, error) {
+	versions, err := c.ListApplicationVersions(ctx, app)
+	if err != nil {
+		return ApplicationVersion{}, err
+	}
+	if len(versions) == 0 {
+		return ApplicationVersion{}, fmt.Errorf("no versions registered for app %q", app)
+	}
+	latest := versions[0]
+	for _, v := range versions[1:] {
+		if v.VersionTimestamp > latest.VersionTimestamp {
+			latest = v
+		}
+	}
+	return latest, nil
+}
+
+// updateVersionMetadataBody mirrors Conductor's UpdateApplicationVersionMetadataBody.
+// version_metadata is opaque JSON — the operator currently stuffs a
+// {"pod_template_hash": "..."} object in here; Conductor stores it as JSONB
+// without interpreting it.
+type updateVersionMetadataBody struct {
+	VersionName     string            `json:"version_name"`
+	VersionMetadata map[string]string `json:"version_metadata"`
+}
+
+// UpdateLatestVersionMetadata writes opaque metadata onto the latest
+// registered application version for app. Resolves "latest" by calling
+// ListApplicationVersions + LatestApplicationVersion first (Conductor's PATCH
+// route takes a version_name in the body, not in the URL).
+//
+//	PATCH <base>/api/<orgName>/applications/<app>/versions/metadata
+//	  body: {"version_name": "<latest>", "version_metadata": {...}}
+func (c *Client) UpdateLatestVersionMetadata(ctx context.Context, app string, metadata map[string]string) error {
+	latest, err := c.LatestApplicationVersion(ctx, app)
+	if err != nil {
+		return fmt.Errorf("UpdateLatestVersionMetadata %s: resolve latest version: %w", app, err)
+	}
+	path := fmt.Sprintf("/api/%s/applications/%s/versions/metadata",
+		url.PathEscape(c.orgName), url.PathEscape(app))
+	body := updateVersionMetadataBody{
+		VersionName:     latest.VersionName,
+		VersionMetadata: metadata,
+	}
+	if err := c.do(ctx, http.MethodPatch, path, body, nil); err != nil {
+		return fmt.Errorf("UpdateLatestVersionMetadata %s (version=%s): %w", app, latest.VersionName, err)
+	}
+	return nil
+}
+
 func (c *Client) do(ctx context.Context, method, path string, in any, out any) error {
 	var body io.Reader
 	if in != nil {

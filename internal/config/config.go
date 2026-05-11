@@ -83,12 +83,22 @@ type Poller struct {
 }
 
 // App is one DBOS application whose queues should be polled.
+//
+// The app.Name is the DBOS application name registered in Conductor AND the
+// K8s Deployment name running its executors — the operator enforces this 1:1
+// mapping rather than carry two strings that need to stay in sync.
 type App struct {
-	// Name is the DBOS application name as registered in Conductor.
+	// Name is both the DBOS application name (as registered in Conductor)
+	// and the K8s Deployment name. Required.
 	Name string `json:"name"`
 
 	// Queues lists the DBOS queue names whose load should be exposed.
 	Queues []string `json:"queues"`
+
+	// Namespace is the K8s namespace where the Deployment named Name lives.
+	// Optional: if empty, the deployment watcher is disabled for this app
+	// (the operator still polls Conductor for queue metrics).
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // MetricsAPI toggles the External Metrics API server (consumed by HPA).

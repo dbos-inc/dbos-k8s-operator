@@ -9,15 +9,22 @@ data:
     # Mounted into the pod at /etc/dbos-operator/config.yaml.
     # Pod restart picks up edits (kustomize hashes the ConfigMap so apply triggers a rollout).
     conductor:
-      orgName: max
+      orgName: local
       jwtPath: /var/run/secrets/conductor/token
-      # endpoint: ""               # leave empty for DBOS-managed Conductor (cloud.dbos.dev)
+      # In-cluster Conductor (matches the Python app's DBOS_CONDUCTOR_URL). The
+      # operator hits the REST API at /api on the same Service.
+      endpoint: http://conductor.dbos-conductor.svc.cluster.local:8090
       # insecureSkipVerify: false  # only for local/dev clusters
     poller:
       interval: 1s
       maxBackoff: 30s
     apps:
+      # app.name == K8s Deployment name. The operator watches the Deployment
+      # named "dbos-k8s-app" in namespace "dbos-demo" for PodTemplate changes
+      # and publishes the resulting ReplicaSet's pod-template-hash to
+      # Conductor as the latest application version's metadata.
       - name: dbos-k8s-app
+        namespace: dbos-demo
         queues:
           - taskQueue
     metricsAPI:
