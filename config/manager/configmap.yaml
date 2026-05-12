@@ -13,16 +13,7 @@ data:
     poller:
       interval: 1s
       maxBackoff: 30s
-    versionManager:
-      enabled: true
-      interval: 30s
-      # createArchives flips the version manager from log-only to actually
-      # creating/deleting sibling Deployments for old versions with pending
-      # workflows. Disable to revert to observation mode.
-      createArchives: true
     apps:
-      # app names must match K8s Deployment name
       - name: dbos-k8s-app
-        namespace: dbos-demo
     metricsAPI:
       enabled: true

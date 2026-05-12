@@ -1,0 +1,56 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: console
+  namespace: dbos-conductor
+spec:
+  selector:
+    app: console
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: console
+  namespace: dbos-conductor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: console
+  template:
+    metadata:
+      labels:
+        app: console
+    spec:
+      containers:
+        - name: console
+          image: dbosdev/console:latest
+          imagePullPolicy: Always
+          env:
+            - name: DBOS_CONDUCTOR_URL
+              value: conductor:8090
+            # OAuth is disabled. These dummy URLs only exist so the nginx
+            # entrypoint substitutes the OAUTH_*_URL_PLACEHOLDER tokens —
+            # otherwise nginx fails to parse the proxy_pass directives.
+            # The routes are never hit because the SPA's OAuth flow is off.
+            - name: DBOS_OAUTH_TOKEN_URL
+              value: http://localhost/disabled-oauth-token
+            - name: DBOS_OAUTH_USERINFO_URL
+              value: http://localhost/disabled-oauth-userinfo
+          ports:
+            - containerPort: 80
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi

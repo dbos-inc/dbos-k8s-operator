@@ -44,11 +44,10 @@ func (d Duration) Native() time.Duration { return time.Duration(d) }
 
 // Config is the top-level operator configuration.
 type Config struct {
-	Conductor      Conductor      `json:"conductor"`
-	Poller         Poller         `json:"poller,omitempty"`
-	VersionManager VersionManager `json:"versionManager,omitempty"`
-	Apps           []App          `json:"apps"`
-	MetricsAPI     MetricsAPI     `json:"metricsAPI,omitempty"`
+	Conductor  Conductor  `json:"conductor"`
+	Poller     Poller     `json:"poller,omitempty"`
+	Apps       []App      `json:"apps"`
+	MetricsAPI MetricsAPI `json:"metricsAPI,omitempty"`
 }
 
 // Conductor describes the Conductor instance the operator polls.
@@ -83,47 +82,14 @@ type Poller struct {
 	MaxBackoff Duration `json:"maxBackoff,omitempty"`
 }
 
-// VersionManager controls how often the operator inspects Conductor for
-// non-terminal workflows grouped by application version. The output drives
-// per-version Deployment lifecycle (creation for old versions with in-flight
-// work, GC when they drain).
-type VersionManager struct {
-	// Enabled toggles the version-manager tick. When false, no extra calls
-	// to Conductor are made and no per-version Deployments are touched.
-	Enabled bool `json:"enabled,omitempty"`
-
-	// Interval is the cadence at which we query Conductor for pending
-	// workflows grouped by version (default 30s). No exponential backoff
-	// here — the data is consumed periodically, so a single failed tick
-	// doesn't change behavior.
-	Interval Duration `json:"interval,omitempty"`
-
-	// CreateArchives toggles K8s side-effects: when true, the version
-	// manager materializes a sibling Deployment per old version with
-	// pending workflows (and deletes it once the version drains). When
-	// false, the tick is observation-only — log lines describe what *would*
-	// be archived, no K8s objects are created or deleted.
-	CreateArchives bool `json:"createArchives,omitempty"`
-}
-
 // App is one DBOS application whose queues should be polled.
-//
-// The app.Name is the DBOS application name registered in Conductor AND the
-// K8s Deployment name running its executors — the operator enforces this 1:1
-// mapping rather than carry two strings that need to stay in sync.
 //
 // Queues are discovered from Conductor each metric tick (no enumeration in
 // the config), so adding/removing a queue in the app requires no operator
 // change.
 type App struct {
-	// Name is both the DBOS application name (as registered in Conductor)
-	// and the K8s Deployment name. Required.
+	// Name is the DBOS application name as registered in Conductor. Required.
 	Name string `json:"name"`
-
-	// Namespace is the K8s namespace where the Deployment named Name lives.
-	// Optional: if empty, the deployment watcher is disabled for this app
-	// (the operator still polls Conductor for queue metrics).
-	Namespace string `json:"namespace,omitempty"`
 }
 
 // MetricsAPI toggles the External Metrics API server (consumed by HPA).
@@ -172,9 +138,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Poller.MaxBackoff == 0 {
 		c.Poller.MaxBackoff = Duration(30 * time.Second)
-	}
-	if c.VersionManager.Enabled && c.VersionManager.Interval == 0 {
-		c.VersionManager.Interval = Duration(30 * time.Second)
 	}
 }
 
