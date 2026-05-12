@@ -121,7 +121,6 @@ func main() {
 		}
 		pcfg := poller.Config{
 			AppName:                app.Name,
-			Queues:                 app.Queues,
 			OrgName:                cfg.Conductor.OrgName,
 			Endpoint:               cfg.Conductor.Endpoint,
 			Token:                  jwt,

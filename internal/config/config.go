@@ -111,13 +111,14 @@ type VersionManager struct {
 // The app.Name is the DBOS application name registered in Conductor AND the
 // K8s Deployment name running its executors — the operator enforces this 1:1
 // mapping rather than carry two strings that need to stay in sync.
+//
+// Queues are discovered from Conductor each metric tick (no enumeration in
+// the config), so adding/removing a queue in the app requires no operator
+// change.
 type App struct {
 	// Name is both the DBOS application name (as registered in Conductor)
 	// and the K8s Deployment name. Required.
 	Name string `json:"name"`
-
-	// Queues lists the DBOS queue names whose load should be exposed.
-	Queues []string `json:"queues"`
 
 	// Namespace is the K8s namespace where the Deployment named Name lives.
 	// Optional: if empty, the deployment watcher is disabled for this app
@@ -190,14 +191,6 @@ func (c *Config) validate() error {
 	for i, a := range c.Apps {
 		if a.Name == "" {
 			return fmt.Errorf("apps[%d].name is required", i)
-		}
-		if len(a.Queues) == 0 {
-			return fmt.Errorf("apps[%d].queues must list at least one queue", i)
-		}
-		for j, q := range a.Queues {
-			if q == "" {
-				return fmt.Errorf("apps[%d].queues[%d] is empty", i, j)
-			}
 		}
 	}
 	if c.Poller.MaxBackoff.Native() < c.Poller.Interval.Native() {

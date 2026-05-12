@@ -126,6 +126,22 @@ func (c *Client) GetQueue(ctx context.Context, app, queue string) (*Queue, error
 	return &out, nil
 }
 
+// ListQueues returns every queue Conductor has registered for app, with each
+// queue's static config (worker_concurrency, etc.) populated. Used by the
+// poller to discover queues without requiring the user to enumerate them in
+// the operator's ConfigMap.
+//
+//	GET <base>/api/<orgName>/applications/<app>/queues
+func (c *Client) ListQueues(ctx context.Context, app string) ([]Queue, error) {
+	path := fmt.Sprintf("/api/%s/applications/%s/queues",
+		url.PathEscape(c.orgName), url.PathEscape(app))
+	var out []Queue
+	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
+		return nil, fmt.Errorf("ListQueues %s: %w", app, err)
+	}
+	return out, nil
+}
+
 // queueDepthBody is the POST body Conductor's ListQueuedWorkflows expects.
 // We filter on the queue name and statuses ENQUEUED + PENDING. Limit is set
 // to a soft cap; if a queue is deeper than this we under-report (acceptable

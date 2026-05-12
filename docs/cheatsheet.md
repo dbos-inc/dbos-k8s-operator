@@ -56,8 +56,8 @@ kubectl get --raw '/apis/external.metrics.k8s.io/v1beta1' | jq .
 # All instances of dbos_queue_load in a namespace:
 kubectl get --raw '/apis/external.metrics.k8s.io/v1beta1/namespaces/default/dbos_queue_load' | jq .
 
-# Filter by HPA-style labelSelector:
-kubectl get --raw '/apis/external.metrics.k8s.io/v1beta1/namespaces/default/dbos_queue_load?labelSelector=queue%3DtaskQueue%2Capp%3Ddbos-k8s-app' | jq .
+# Filter by HPA-style labelSelector (app only — operator aggregates across queues):
+kubectl get --raw '/apis/external.metrics.k8s.io/v1beta1/namespaces/default/dbos_queue_load?labelSelector=app%3Ddbos-k8s-app' | jq .
 
 # Health probes (HTTPS; insecure-skip-verify because the cert SAN is the in-cluster service name):
 kubectl -n dbos-operator port-forward svc/dbos-operator 6443:443 &

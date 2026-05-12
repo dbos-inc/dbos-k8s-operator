@@ -5,16 +5,11 @@ metadata:
   namespace: dbos-operator
 data:
   config.yaml: |
-    # DBOS Kubernetes Metrics Operator config.
-    # Mounted into the pod at /etc/dbos-operator/config.yaml.
-    # Pod restart picks up edits (kustomize hashes the ConfigMap so apply triggers a rollout).
+    # DBOS Kubernetes Operator config. Mounted into the pod at /etc/dbos-operator/config.yaml.
     conductor:
       orgName: local
       jwtPath: /var/run/secrets/conductor/token
-      # In-cluster Conductor (matches the Python app's DBOS_CONDUCTOR_URL). The
-      # operator hits the REST API at /api on the same Service.
       endpoint: http://conductor.dbos-conductor.svc.cluster.local:8090
-      # insecureSkipVerify: false  # only for local/dev clusters
     poller:
       interval: 1s
       maxBackoff: 30s
@@ -26,13 +21,8 @@ data:
       # workflows. Disable to revert to observation mode.
       createArchives: true
     apps:
-      # app.name == K8s Deployment name. The operator watches the Deployment
-      # named "dbos-k8s-app" in namespace "dbos-demo" for PodTemplate changes
-      # and publishes the resulting ReplicaSet's pod-template-hash to
-      # Conductor as the latest application version's metadata.
+      # app names must match K8s Deployment name
       - name: dbos-k8s-app
         namespace: dbos-demo
-        queues:
-          - taskQueue
     metricsAPI:
       enabled: true
