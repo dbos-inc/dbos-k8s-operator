@@ -49,7 +49,7 @@ The operator's runtime config is a YAML file mounted from a ConfigMap named `dbo
 
 ```yaml
 conductor:
-  # Conductor org name
+  # Conductor org name. "local" for self hosted without OAuth.
   orgName: local
 
   # Path to the bearer JWT file. Mounted from the `conductor-jwt` Secret.
