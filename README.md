@@ -21,8 +21,6 @@ For every DBOS app you list in its ConfigMap, the operator:
 
 ## Install
 
-[WIP: this will change when we support conductor machine accounts]
-
 The operator image is published to [GHCR](ghcr.io/dbos-inc/dbos-k8s-operator).
 
 Two pieces of state are user-provided and **not** shipped in the install bundle: the Conductor JWT (a Secret) and the operator's runtime config (a ConfigMap). The Deployment references both by name and will keep its pod in `ContainerCreating` until they exist — applying out of order is safe, just visibly pending.
