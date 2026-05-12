@@ -28,6 +28,7 @@ import (
 	"github.com/dbos-inc/dbos-k8s-operator/internal/metricsadapter"
 	"github.com/dbos-inc/dbos-k8s-operator/internal/poller"
 	"github.com/dbos-inc/dbos-k8s-operator/internal/store"
+	"github.com/dbos-inc/dbos-k8s-operator/internal/versionmanager"
 )
 
 // adapter wires our External Metrics provider onto AdapterBase. AdapterBase
@@ -106,17 +107,29 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	// One poller goroutine per configured app.
+	// One poller goroutine per configured app. Each goroutine runs both
+	// the queue-metric tick (always on) and, if enabled, the version-
+	// manager tick.
+	var versionMgrInterval time.Duration
+	if cfg.VersionManager.Enabled {
+		versionMgrInterval = cfg.VersionManager.Interval.Native()
+	}
 	for _, app := range cfg.Apps {
+		var vm *versionmanager.Manager
+		if cfg.VersionManager.Enabled && cfg.VersionManager.CreateArchives && app.Namespace != "" && k8sClient != nil {
+			vm = versionmanager.New(k8sClient, app.Namespace, app.Name)
+		}
 		pcfg := poller.Config{
-			AppName:     app.Name,
-			Queues:      app.Queues,
-			OrgName:     cfg.Conductor.OrgName,
-			Endpoint:    cfg.Conductor.Endpoint,
-			Token:       jwt,
-			InsecureTLS: cfg.Conductor.InsecureSkipVerify,
-			Interval:    cfg.Poller.Interval.Native(),
-			MaxBackoff:  cfg.Poller.MaxBackoff.Native(),
+			AppName:                app.Name,
+			Queues:                 app.Queues,
+			OrgName:                cfg.Conductor.OrgName,
+			Endpoint:               cfg.Conductor.Endpoint,
+			Token:                  jwt,
+			InsecureTLS:            cfg.Conductor.InsecureSkipVerify,
+			Interval:               cfg.Poller.Interval.Native(),
+			MaxBackoff:             cfg.Poller.MaxBackoff.Native(),
+			VersionManagerInterval: versionMgrInterval,
+			VersionMgr:             vm,
 		}
 		wg.Add(1)
 		go func() {

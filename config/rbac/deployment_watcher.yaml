@@ -1,0 +1,31 @@
+# Grants the operator read access to Deployments and ReplicaSets cluster-wide.
+# Required by internal/deployment.Watcher's informer (apps/v1.Deployments and
+# apps/v1.ReplicaSets). Scope is cluster-wide for simplicity: each watcher is
+# pinned to a specific namespace at runtime via informer config, but the RBAC
+# would otherwise need a per-namespace RoleBinding for every app's namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: dbos-operator-deployment-watcher
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Pods are listed by label selector at publish time to join Conductor
+  # executor hostnames with our newly-rolled-out pods.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: dbos-operator-deployment-watcher
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: dbos-operator-deployment-watcher
+subjects:
+  - kind: ServiceAccount
+    name: dbos-operator
+    namespace: dbos-operator

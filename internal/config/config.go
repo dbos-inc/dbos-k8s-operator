@@ -44,10 +44,11 @@ func (d Duration) Native() time.Duration { return time.Duration(d) }
 
 // Config is the top-level operator configuration.
 type Config struct {
-	Conductor  Conductor  `json:"conductor"`
-	Poller     Poller     `json:"poller,omitempty"`
-	Apps       []App      `json:"apps"`
-	MetricsAPI MetricsAPI `json:"metricsAPI,omitempty"`
+	Conductor      Conductor      `json:"conductor"`
+	Poller         Poller         `json:"poller,omitempty"`
+	VersionManager VersionManager `json:"versionManager,omitempty"`
+	Apps           []App          `json:"apps"`
+	MetricsAPI     MetricsAPI     `json:"metricsAPI,omitempty"`
 }
 
 // Conductor describes the Conductor instance the operator polls.
@@ -71,7 +72,7 @@ type Conductor struct {
 	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
 }
 
-// Poller controls per-app poll cadence. All apps share these knobs.
+// Poller controls per-app queue-metric poll cadence. All apps share these knobs.
 type Poller struct {
 	// Interval is the steady-state poll cadence (default 1s).
 	Interval Duration `json:"interval,omitempty"`
@@ -80,6 +81,29 @@ type Poller struct {
 	// (default 30s). The operator doubles the interval on each failed tick
 	// (with ±10% jitter) up to this cap; resets to Interval on success.
 	MaxBackoff Duration `json:"maxBackoff,omitempty"`
+}
+
+// VersionManager controls how often the operator inspects Conductor for
+// non-terminal workflows grouped by application version. The output drives
+// per-version Deployment lifecycle (creation for old versions with in-flight
+// work, GC when they drain).
+type VersionManager struct {
+	// Enabled toggles the version-manager tick. When false, no extra calls
+	// to Conductor are made and no per-version Deployments are touched.
+	Enabled bool `json:"enabled,omitempty"`
+
+	// Interval is the cadence at which we query Conductor for pending
+	// workflows grouped by version (default 30s). No exponential backoff
+	// here — the data is consumed periodically, so a single failed tick
+	// doesn't change behavior.
+	Interval Duration `json:"interval,omitempty"`
+
+	// CreateArchives toggles K8s side-effects: when true, the version
+	// manager materializes a sibling Deployment per old version with
+	// pending workflows (and deletes it once the version drains). When
+	// false, the tick is observation-only — log lines describe what *would*
+	// be archived, no K8s objects are created or deleted.
+	CreateArchives bool `json:"createArchives,omitempty"`
 }
 
 // App is one DBOS application whose queues should be polled.
@@ -147,6 +171,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Poller.MaxBackoff == 0 {
 		c.Poller.MaxBackoff = Duration(30 * time.Second)
+	}
+	if c.VersionManager.Enabled && c.VersionManager.Interval == 0 {
+		c.VersionManager.Interval = Duration(30 * time.Second)
 	}
 }
 
