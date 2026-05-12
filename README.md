@@ -1,8 +1,6 @@
 # DBOS Kubernetes Metrics Operator
 
-A single-binary operator that polls **DBOS Conductor** for queue load and
-exposes the result to **Kubernetes HPA** via the External Metrics API
-(`external.metrics.k8s.io/v1beta1`).
+A single-binary operator that polls **DBOS Conductor** for queue load and exposes the result to **Kubernetes HPA** via the External Metrics API.
 
 ## What it does
 
@@ -25,46 +23,31 @@ For every DBOS app you list in its ConfigMap, the operator:
 
 [WIP: this will change when we support conductor machine accounts]
 
-The operator image is published to GitHub Container Registry at `ghcr.io/dbos-inc/dbos-k8s-operator`. The default install pulls `:latest`; pin to a release tag in production.
+The operator image is published to [GHCR](ghcr.io/dbos-inc/dbos-k8s-operator).
 
 Two pieces of state are user-provided and **not** shipped in the install bundle: the Conductor JWT (a Secret) and the operator's runtime config (a ConfigMap). The Deployment references both by name and will keep its pod in `ContainerCreating` until they exist — applying out of order is safe, just visibly pending.
 
-1. **Create the namespace and the JWT Secret:**
+1. **Apply the operator manifests.** This creates the `dbos-operator` namespace along with the rest of the bundle.
    ```bash
-   kubectl create namespace dbos-operator
+   kubectl apply -f https://github.com/dbos-inc/dbos-k8s-operator/releases/download/[version]/install.yaml
+   ```
+
+2. **Create the JWT Secret:**
+   ```bash
    kubectl -n dbos-operator create secret generic conductor-jwt \
      --from-literal=token="<long-lived JWT>"
    ```
 
-2. **Create the runtime ConfigMap.** Copy `config/manager/configmap.yaml`, edit the `orgName`, `endpoint`, and `apps[]` fields for your environment (schema in [Configuring](#configuring)), then:
+3. **Create the runtime ConfigMap.** Copy `config/manager/configmap.yaml`, edit the `orgName`, `endpoint`, and `apps[]` fields for your environment (schema in [Configuring](#configuring)), then:
    ```bash
    kubectl apply -f path/to/your/configmap.yaml
    ```
 
-3. **Apply the operator manifests.**
-   ```bash
-   kubectl apply -f https://github.com/dbos-inc/dbos-k8s-operator/releases/download/v0.1.0/install.yaml
-   ```
-
-   **From source (for development):**
-   ```bash
-   IMG=<your-registry>/dbos-operator:dev
-   make docker-build docker-push IMG=$IMG
-   make deploy IMG=$IMG
-   ```
-
 See `docs/cheatsheet.md` for inspection, rollout, and teardown commands.
-
-### Cutting a release
-
-Releases are produced by the `Release` workflow (`.github/workflows/release.yml`), which is **manually triggered**:
-
-1. GitHub → Actions → Release → **Run workflow** → enter a version (e.g. `v0.1.0`).
-2. The workflow builds the binary, pushes the image to GHCR as both `:<version>` and `:latest`, regenerates `install.yaml` with the image pinned to `<version>` via `make install-yaml`, and creates a GitHub release with `install.yaml` attached.
 
 ## Configuring
 
-The operator's runtime config is a YAML file mounted from a ConfigMap named `dbos-operator` at `/etc/dbos-operator/config.yaml`. The ConfigMap is **not** included in install.yaml or in the `make deploy` bundle; it's user-provided. Use `config/manager/configmap.yaml` as a template:
+The operator's runtime config is a YAML file mounted from a ConfigMap named `dbos-operator` at `/etc/dbos-operator/config.yaml`. The ConfigMap is **not** included in install.yaml or in the `make deploy` bundle. Use `config/manager/configmap.yaml` as a template:
 
 ```yaml
 conductor:
@@ -72,10 +55,10 @@ conductor:
   orgName: local
 
   # Path to the bearer JWT file. Mounted from the `conductor-jwt` Secret.
-  # TODO: will become a m2m secret
   jwtPath: /var/run/secrets/conductor/token
 
   # When self-hosting Conductor, full base URL of Conductor's HTTP API up through any cloud path prefix.
+  # Not necessary when using DBOS-managed Conductor
   endpoint: http://conductor.dbos-conductor.svc.cluster.local:8090
 
 poller:
@@ -103,13 +86,12 @@ The TLS port and cert paths are container args in `config/manager/deployment.yam
 
 ### TLS certificate
 
-The operator serves the External Metrics API over HTTPS and is registered as an aggregated APIServer, so `kube-apiserver` must trust the cert it presents. Out of the box, `config/cert-manager/` ships a namespace-scoped `Issuer` of type `selfSigned` (`dbos-operator-selfsigned`) and a `Certificate` (`dbos-operator-serving-cert`). cert-manager issues a one-year leaf cert, writes it to a Secret of the same name, and rotates it 30 days before expiry. The `cert-manager.io/inject-ca-from` annotation on the `APIService` lets cert-manager's `cainjector` populate `spec.caBundle` automatically. No user input needed beyond installing cert-manager.
+The operator serves the External Metrics API over HTTPS and is registered as an aggregated APIServer, so `kube-apiserver` must trust the cert it presents. Out of the box, `config/cert-manager/` ships a namespace-scoped `Issuer` of type `selfSigned` (`dbos-operator-selfsigned`) and a `Certificate` (`dbos-operator-serving-cert`). The `cert-manager.io/inject-ca-from` annotation on the `APIService` lets cert-manager's `cainjector` populate `spec.caBundle` automatically. No user input needed beyond installing cert-manager.
 
 Alternatives if the self-signed default isn't acceptable:
 
 - **Different cert-manager Issuer** (Vault, ACME, internal CA): edit `certificate.yaml`'s `issuerRef`, or replace `issuer.yaml` with your own `Issuer`/`ClusterIssuer`.
 - **Bring-your-own Secret**: drop `config/cert-manager/` and create the `dbos-operator-serving-cert` Secret yourself (with `tls.crt`, `tls.key`, `ca.crt`). The `inject-ca-from` annotation will still pick up `ca.crt`.
-- **No cert-manager at all**: use the `make certs` + `make deploy-self-signed-cert` + `make deploy-self-signed-apiservice` flow described in `config/default/kustomization.yaml`.
 
 ### ServiceAccount
 
@@ -188,7 +170,6 @@ config/apiservice/                    APIService registering external.metrics.k8
 config/cert-manager/                  Issuer + Certificate for the metrics API serving cert
 config/default/                       kustomize root that ties it all together
 
-hack/make-certs.sh                    Self-signed fallback for clusters without cert-manager
 Dockerfile, Makefile, go.mod
 docs/cheatsheet.md                    inspection / build / teardown commands
 ```
@@ -197,6 +178,14 @@ docs/cheatsheet.md                    inspection / build / teardown commands
 the only reader exposed externally. The `store` interface is the seam — a
 Prometheus exporter or a KEDA gRPC scaler can be added later as additional
 read frontends without touching the poller.
+
+**From source:**
+
+```bash
+IMG=<your-registry>/dbos-operator:dev
+make docker-build docker-push IMG=$IMG
+make deploy IMG=$IMG
+```
 
 **Local build & checks:**
 
