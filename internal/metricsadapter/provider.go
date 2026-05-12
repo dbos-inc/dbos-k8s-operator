@@ -29,12 +29,10 @@ import (
 // MetricName is the single external metric name exposed.
 const MetricName = "dbos_queue_load"
 
-// LabelApp is the only user-facing selector label. The queue dimension is
-// internal: the adapter aggregates to one value per app.
+// LabelApp is the user-facing selector label
 const LabelApp = "app"
 
-// Provider is a custom-metrics-apiserver ExternalMetricsProvider backed by a
-// store.Store. Construction is straightforward; the library does the rest.
+// Provider is a custom-metrics-apiserver ExternalMetricsProvider backed by a store.Store
 type Provider struct {
 	Store store.Store
 }
@@ -72,56 +70,47 @@ func (p *Provider) GetExternalMetric(
 		return &external_metrics.ExternalMetricValueList{}, nil
 	}
 
-	// Match on app
-	predicate := func(app, _ string) bool {
-		return selector.Matches(labels.Set{LabelApp: app})
-	}
-	matches := p.Store.Match(predicate)
-
-	type agg struct {
-		winnerQueue string
-		sample      store.Sample
-		queueCount  int
-	}
-	byApp := make(map[string]*agg)
-	for _, m := range matches {
-		a, ok := byApp[m.Key.App]
-		if !ok {
-			a = &agg{}
-			byApp[m.Key.App] = a
+	var values []external_metrics.ExternalMetricValue
+	for _, app := range p.Store.Apps() {
+		if !selector.Matches(labels.Set{LabelApp: app}) {
+			continue
 		}
-		a.queueCount++
-		if a.winnerQueue == "" || m.Sample.Load > a.sample.Load {
-			a.winnerQueue = m.Key.Queue
-			a.sample = m.Sample
+		queues := p.Store.ByApp(app)
+		if len(queues) == 0 {
+			continue
 		}
-	}
-
-	if len(byApp) == 0 {
-		logger.Info("no queues matched selector; returning empty value list",
-			"observedKeyCount", len(matches))
-		return &external_metrics.ExternalMetricValueList{}, nil
-	}
-
-	values := make([]external_metrics.ExternalMetricValue, 0, len(byApp))
-	for app, a := range byApp {
+		var (
+			winnerQueue string
+			winner      store.Sample
+		)
+		for _, e := range queues {
+			if winnerQueue == "" || e.Sample.Load > winner.Load {
+				winnerQueue = e.Queue
+				winner = e.Sample
+			}
+		}
 		// load is a dimensionless ratio; encode as a milli-quantity to
 		// preserve fractional precision through HPA's arithmetic.
-		q := resource.NewMilliQuantity(int64(a.sample.Load*1000), resource.DecimalSI)
+		q := resource.NewMilliQuantity(int64(winner.Load*1000), resource.DecimalSI)
 		values = append(values, external_metrics.ExternalMetricValue{
 			MetricName:   info.Metric,
 			MetricLabels: map[string]string{LabelApp: app},
-			Timestamp:    metav1.NewTime(a.sample.ObservedAt),
+			Timestamp:    metav1.NewTime(winner.ObservedAt),
 			Value:        *q,
 		})
 		logger.Info("aggregated queue load",
 			"app", app,
-			"queueCount", a.queueCount,
-			"winnerQueue", a.winnerQueue,
-			"load", a.sample.Load,
-			"depth", a.sample.Depth,
-			"workerConcurrency", a.sample.WorkerConcurrency,
+			"queueCount", len(queues),
+			"winnerQueue", winnerQueue,
+			"load", winner.Load,
+			"depth", winner.Depth,
+			"workerConcurrency", winner.WorkerConcurrency,
 		)
+	}
+
+	if len(values) == 0 {
+		logger.Info("no queues matched selector; returning empty value list")
+		return &external_metrics.ExternalMetricValueList{}, nil
 	}
 	return &external_metrics.ExternalMetricValueList{Items: values}, nil
 }

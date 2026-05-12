@@ -94,10 +94,7 @@ func tickApp(ctx context.Context, client *conductor.Client, cfg Config, s store.
 	// Evict store entries for queues that no longer exist (or that lost their
 	// worker_concurrency between ticks). Without this, the max-aggregation
 	// would keep returning a stale value indefinitely.
-	for _, e := range s.List() {
-		if e.App != cfg.AppName {
-			continue
-		}
+	for _, e := range s.ByApp(cfg.AppName) {
 		if _, ok := live[e.Queue]; !ok {
 			logger.V(1).Info("evicting stale queue sample", "queue", e.Queue, "lastObservedAt", e.ObservedAt)
 			s.Delete(e.Key)

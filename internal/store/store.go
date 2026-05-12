@@ -24,8 +24,8 @@ type Key struct {
 	Queue string
 }
 
-// KeyedSample pairs a Key with its Sample. Returned by List and matchers so
-// callers can iterate without exposing the underlying map.
+// KeyedSample pairs a Key with its Sample. Returned by readers so callers
+// can iterate without exposing the underlying map.
 type KeyedSample struct {
 	Key
 	Sample
@@ -45,60 +45,91 @@ type Store interface {
 	// List returns every entry. Callers must not mutate the returned slice.
 	List() []KeyedSample
 
-	// Match returns every entry whose (app, queue) satisfies predicate.
-	// Used by the External Metrics adapter to evaluate HPA label selectors.
-	Match(predicate func(app, queue string) bool) []KeyedSample
+	// Apps returns the distinct app names that currently have at least one
+	// sample. Used by the External Metrics adapter to evaluate HPA label
+	// selectors against the set of observed apps.
+	Apps() []string
+
+	// ByApp returns every sample for app. Nil if app is unknown.
+	ByApp(app string) []KeyedSample
 }
 
-// InMemory is the default Store implementation: a sync.RWMutex over a map.
 type InMemory struct {
-	mu      sync.RWMutex
-	entries map[Key]Sample
+	mu    sync.RWMutex
+	byApp map[string]map[string]Sample
 }
 
-// NewInMemory returns an empty in-memory store.
 func NewInMemory() *InMemory {
-	return &InMemory{entries: make(map[Key]Sample)}
+	return &InMemory{byApp: make(map[string]map[string]Sample)}
 }
 
 func (s *InMemory) Set(k Key, sample Sample) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entries[k] = sample
+	queues, ok := s.byApp[k.App]
+	if !ok {
+		queues = make(map[string]Sample)
+		s.byApp[k.App] = queues
+	}
+	queues[k.Queue] = sample
 }
 
 func (s *InMemory) Get(k Key) (Sample, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	v, ok := s.entries[k]
+	queues, ok := s.byApp[k.App]
+	if !ok {
+		return Sample{}, false
+	}
+	v, ok := queues[k.Queue]
 	return v, ok
 }
 
 func (s *InMemory) Delete(k Key) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.entries, k)
+	queues, ok := s.byApp[k.App]
+	if !ok {
+		return
+	}
+	delete(queues, k.Queue)
+	if len(queues) == 0 {
+		delete(s.byApp, k.App)
+	}
 }
 
 func (s *InMemory) List() []KeyedSample {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]KeyedSample, 0, len(s.entries))
-	for k, v := range s.entries {
-		out = append(out, KeyedSample{Key: k, Sample: v})
+	var out []KeyedSample
+	for app, queues := range s.byApp {
+		for q, v := range queues {
+			out = append(out, KeyedSample{Key: Key{App: app, Queue: q}, Sample: v})
+		}
 	}
 	return out
 }
 
-func (s *InMemory) Match(predicate func(app, queue string) bool) []KeyedSample {
+func (s *InMemory) Apps() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	var out []KeyedSample
-	for k, v := range s.entries {
-		if !predicate(k.App, k.Queue) {
-			continue
-		}
-		out = append(out, KeyedSample{Key: k, Sample: v})
+	out := make([]string, 0, len(s.byApp))
+	for app := range s.byApp {
+		out = append(out, app)
+	}
+	return out
+}
+
+func (s *InMemory) ByApp(app string) []KeyedSample {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	queues, ok := s.byApp[app]
+	if !ok {
+		return nil
+	}
+	out := make([]KeyedSample, 0, len(queues))
+	for q, v := range queues {
+		out = append(out, KeyedSample{Key: Key{App: app, Queue: q}, Sample: v})
 	}
 	return out
 }
