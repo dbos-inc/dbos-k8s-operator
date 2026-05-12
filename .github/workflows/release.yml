@@ -1,0 +1,81 @@
+# Manually-triggered release pipeline:
+#   1. Build the operator binary + image for linux/amd64.
+#   2. Push the image to GHCR as both :<version> and :latest.
+#   3. Render install.yaml from the kustomize default overlay with the image
+#      pinned to :<version>, and attach it to a GitHub release.
+#
+# Trigger: Actions → Release → Run workflow, supplying the version (e.g. v0.1.0).
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version tag (e.g. v0.1.0). Must start with v.'
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  release:
+    name: Build, push, and release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the GitHub release
+      packages: write   # push to ghcr.io
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+    steps:
+      - name: Validate version input
+        run: |
+          if [[ ! "${{ inputs.version }}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "version must be vMAJOR.MINOR.PATCH (optionally with a -suffix); got '${{ inputs.version }}'" >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build operator binary
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -ldflags="-s -w" -o bin/operator ./cmd/operator
+
+      - name: Log in to GHCR
+        uses: docker/login-action@74a5d142397b4f367a81961eba4e8cd7edddf772 # v3.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        run: |
+          docker build --platform linux/amd64 \
+            -t "$IMAGE:${{ inputs.version }}" \
+            -t "$IMAGE:latest" \
+            .
+          docker push "$IMAGE:${{ inputs.version }}"
+          docker push "$IMAGE:latest"
+
+      - name: Render install.yaml pinned to ${{ inputs.version }}
+        run: |
+          sed -i.bak "s|image: ghcr.io/dbos-inc/dbos-k8s-operator:.*|image: $IMAGE:${{ inputs.version }}|" \
+            config/manager/deployment.yaml
+          rm config/manager/deployment.yaml.bak
+          make install-yaml
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
+        with:
+          tag_name: ${{ inputs.version }}
+          name: ${{ inputs.version }}
+          generate_release_notes: true
+          files: install.yaml

@@ -17,8 +17,6 @@ import (
 	"time"
 )
 
-// defaultDomain is the fallback when both Options.Endpoint and the DBOS_DOMAIN
-// env var are unset.
 const defaultDomain = "cloud.dbos.dev"
 
 // defaultCloudPathPrefix is the path prefix DBOS Cloud uses to route to
@@ -26,16 +24,13 @@ const defaultDomain = "cloud.dbos.dev"
 // just /api, so users override Endpoint with the appropriate base URL.
 const defaultCloudPathPrefix = "/conductor/v1alpha1"
 
-// Queue mirrors Conductor's QueueOutput (only the fields the operator uses).
 type Queue struct {
 	Name              string `json:"name"`
 	Concurrency       *int   `json:"concurrency"`
 	WorkerConcurrency *int   `json:"worker_concurrency"`
 }
 
-// workflow is what we decode QueueDepth's array elements into; we only care
-// about the length, so an empty struct would do, but a named type keeps the
-// JSON decoder honest about the shape it accepts.
+// workflow is what we decode QueueDepth's array elements into
 type workflow struct {
 	WorkflowUUID string `json:"WorkflowUUID"`
 }
@@ -109,18 +104,15 @@ func resolveBaseURL(endpoint string) (string, error) {
 	if domain == "" {
 		domain = defaultDomain
 	}
-	return "https://" + domain + defaultCloudPathPrefix, nil
+	domain = strings.TrimRight(domain, "/")
+	if !strings.Contains(domain, "://") {
+		domain = "https://" + domain
+	}
+	return domain + defaultCloudPathPrefix, nil
 }
 
-// ListQueues returns every queue Conductor has registered for app, with each
-// queue's static config (worker_concurrency, etc.) populated. Used by the
-// poller to discover queues without requiring the user to enumerate them in
-// the operator's ConfigMap.
-//
-//	GET <base>/api/<orgName>/applications/<app>/queues
 func (c *Client) ListQueues(ctx context.Context, app string) ([]Queue, error) {
-	path := fmt.Sprintf("/api/%s/applications/%s/queues",
-		url.PathEscape(c.orgName), url.PathEscape(app))
+	path := fmt.Sprintf("/api/%s/applications/%s/queues", url.PathEscape(c.orgName), url.PathEscape(app))
 	var out []Queue
 	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
 		return nil, fmt.Errorf("ListQueues %s: %w", app, err)
@@ -144,12 +136,11 @@ type queueDepthBody struct {
 //	POST <base>/api/<orgName>/applications/<app>/queues/
 //	  body: {queue_name: [<queue>], status: ["ENQUEUED","PENDING"], limit: 10000}
 func (c *Client) QueueDepth(ctx context.Context, app, queue string) (int64, error) {
-	path := fmt.Sprintf("/api/%s/applications/%s/queues/",
-		url.PathEscape(c.orgName), url.PathEscape(app))
+	path := fmt.Sprintf("/api/%s/applications/%s/queues/", url.PathEscape(c.orgName), url.PathEscape(app))
 	body := queueDepthBody{
 		QueueName: []string{queue},
 		Status:    []string{"ENQUEUED", "PENDING"},
-		Limit:     10000,
+		Limit:     10000, // TODO: this could be made configurable. For now, reasonable soft cap.
 	}
 	var out []workflow
 	if err := c.do(ctx, http.MethodPost, path, body, &out); err != nil {

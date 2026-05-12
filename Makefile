@@ -53,6 +53,18 @@ deploy: ## Apply the full operator install (kustomize default overlay; pass IMG=
 	  sed -i.bak "s|image: .*|image: $(IMG)|" deployment.yaml && rm deployment.yaml.bak
 	kubectl apply -k config/default
 
+.PHONY: install-yaml
+install-yaml: ## Regenerate install.yaml from the kustomize default overlay.
+	@{ \
+	  echo "# DO NOT EDIT BY HAND."; \
+	  echo "# Generated from config/ via 'make install-yaml' (or the release workflow)."; \
+	  echo "# Source: kubectl kustomize config/default"; \
+	  echo "# To change this file, edit the manifests under config/ and re-run the target."; \
+	  echo "---"; \
+	  kubectl kustomize config/default; \
+	} > install.yaml
+	@echo "wrote install.yaml ($$(wc -l < install.yaml) lines)"
+
 .PHONY: undeploy
 undeploy: ## Remove every resource the default overlay applied (cascades to CRs only if a CRD exists).
 	kubectl delete -k config/default --ignore-not-found

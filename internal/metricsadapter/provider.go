@@ -72,11 +72,11 @@ func (p *Provider) GetExternalMetric(
 		return &external_metrics.ExternalMetricValueList{}, nil
 	}
 
-	// Match on app only — queue is no longer user-facing.
+	// Match on app
 	predicate := func(app, _ string) bool {
 		return selector.Matches(labels.Set{LabelApp: app})
 	}
-	matches := p.Store.MatchByNamespace(namespace, predicate)
+	matches := p.Store.Match(predicate)
 
 	type agg struct {
 		winnerQueue string

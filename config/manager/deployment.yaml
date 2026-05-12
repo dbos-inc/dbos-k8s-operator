@@ -22,8 +22,11 @@ spec:
           type: RuntimeDefault
       containers:
         - name: operator
-          # Override before deploying: make deploy IMG=...
-          image: 500883621673.dkr.ecr.us-east-1.amazonaws.com/dbos-operator:dev
+          # Released images are published to GHCR by the release workflow
+          # (.github/workflows/release.yml). The :latest tag tracks the most
+          # recent release; pin to a specific tag (e.g. :v0.1.0) in production.
+          # Override locally with: make deploy IMG=...
+          image: ghcr.io/dbos-inc/dbos-k8s-operator:latest
           imagePullPolicy: Always
           args:
             - --config=/etc/dbos-operator/config.yaml

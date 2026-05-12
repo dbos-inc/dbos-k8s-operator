@@ -34,8 +34,7 @@ func main() {
 	logs.InitLogs()
 	defer logs.FlushLogs()
 
-	configPath := flag.String("config", "/etc/dbos-operator/config.yaml",
-		"path to the operator config YAML (mounted from a ConfigMap)")
+	configPath := flag.String("config", "/etc/dbos-operator/config.yaml", "path to the operator config YAML (mounted from a ConfigMap)")
 
 	// klog registers its own flags (-v, -log_dir, ...) onto flag.CommandLine so
 	// AddGoFlagSet below exposes them as pflag long-form (--v=2) for the Adapter.

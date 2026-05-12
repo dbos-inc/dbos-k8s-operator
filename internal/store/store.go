@@ -18,13 +18,10 @@ type Sample struct {
 	ObservedAt        time.Time
 }
 
-// Key identifies one queue observation. Namespace stays empty in today's
-// ConfigMap-driven mode (single-tenant, no CRDs); a future CRD-driven mode
-// would populate it from the CR's metadata.namespace.
+// Key identifies one queue observation.
 type Key struct {
-	Namespace string
-	App       string
-	Queue     string
+	App   string
+	Queue string
 }
 
 // KeyedSample pairs a Key with its Sample. Returned by List and matchers so
@@ -48,11 +45,9 @@ type Store interface {
 	// List returns every entry. Callers must not mutate the returned slice.
 	List() []KeyedSample
 
-	// MatchByNamespace returns every entry whose Namespace equals ns OR is
-	// empty (today's wildcard for ConfigMap-driven entries), and whose
-	// (app, queue) satisfies predicate. Used by the External Metrics adapter
-	// to evaluate HPA label selectors within a namespace scope.
-	MatchByNamespace(ns string, predicate func(app, queue string) bool) []KeyedSample
+	// Match returns every entry whose (app, queue) satisfies predicate.
+	// Used by the External Metrics adapter to evaluate HPA label selectors.
+	Match(predicate func(app, queue string) bool) []KeyedSample
 }
 
 // InMemory is the default Store implementation: a sync.RWMutex over a map.
@@ -95,14 +90,11 @@ func (s *InMemory) List() []KeyedSample {
 	return out
 }
 
-func (s *InMemory) MatchByNamespace(ns string, predicate func(app, queue string) bool) []KeyedSample {
+func (s *InMemory) Match(predicate func(app, queue string) bool) []KeyedSample {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var out []KeyedSample
 	for k, v := range s.entries {
-		if k.Namespace != "" && k.Namespace != ns {
-			continue
-		}
 		if !predicate(k.App, k.Queue) {
 			continue
 		}

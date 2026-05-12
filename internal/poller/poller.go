@@ -26,7 +26,6 @@ type Config struct {
 	MaxBackoff  time.Duration
 }
 
-// Run blocks until ctx is cancelled. Spawn one of these per configured app.
 func Run(ctx context.Context, cfg Config, s store.Store) {
 	logger := klog.FromContext(ctx).WithValues("app", cfg.AppName)
 
@@ -67,10 +66,6 @@ func Run(ctx context.Context, cfg Config, s store.Store) {
 // tickApp discovers the app's queues from Conductor, then polls each one's
 // depth. Queues without worker_concurrency are skipped (load is undefined).
 // Returns true if discovery or any individual depth poll failed.
-//
-// Queue discovery on every tick (rather than once at startup) means adding a
-// queue to the app shows up in HPA's input within one poll interval, with no
-// operator restart needed.
 func tickApp(ctx context.Context, client *conductor.Client, cfg Config, s store.Store, logger klog.Logger) bool {
 	pollCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -85,15 +80,12 @@ func tickApp(ctx context.Context, client *conductor.Client, cfg Config, s store.
 	live := make(map[string]struct{}, len(queues))
 	for _, q := range queues {
 		if q.WorkerConcurrency == nil || *q.WorkerConcurrency <= 0 {
-			logger.V(2).Info("queue has no worker_concurrency; skipping",
-				"queue", q.Name,
-				"workerConcurrency", q.WorkerConcurrency,
-				"concurrency", q.Concurrency)
+			logger.V(2).Info("queue has no worker_concurrency; skipping", "queue", q.Name, "workerConcurrency", q.WorkerConcurrency)
 			continue
 		}
 		if err := pollQueueDepth(pollCtx, client, cfg.AppName, q, s, logger); err != nil {
 			anyErr = true
-			logger.V(2).Info("queue depth poll failed", "queue", q.Name, "err", err)
+			logger.V(2).Error(err, "queue depth poll failed", "queue", q.Name)
 			continue
 		}
 		live[q.Name] = struct{}{}
@@ -107,8 +99,7 @@ func tickApp(ctx context.Context, client *conductor.Client, cfg Config, s store.
 			continue
 		}
 		if _, ok := live[e.Queue]; !ok {
-			logger.V(1).Info("evicting stale queue sample",
-				"queue", e.Queue, "lastObservedAt", e.ObservedAt)
+			logger.V(1).Info("evicting stale queue sample", "queue", e.Queue, "lastObservedAt", e.ObservedAt)
 			s.Delete(e.Key)
 		}
 	}
@@ -144,6 +135,6 @@ func jitter(d time.Duration) time.Duration {
 	if d <= 0 {
 		return d
 	}
-	delta := time.Duration(rand.Int63n(int64(d)/5 + 1)) - d/10
+	delta := time.Duration(rand.Int63n(int64(d)/5+1)) - d/10
 	return d + delta
 }

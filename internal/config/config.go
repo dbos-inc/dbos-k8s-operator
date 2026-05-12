@@ -39,15 +39,13 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// Native returns the underlying time.Duration.
 func (d Duration) Native() time.Duration { return time.Duration(d) }
 
-// Config is the top-level operator configuration.
 type Config struct {
 	Conductor  Conductor  `json:"conductor"`
 	Poller     Poller     `json:"poller,omitempty"`
 	Apps       []App      `json:"apps"`
-	MetricsAPI MetricsAPI `json:"metricsAPI,omitempty"`
+	MetricsAPI MetricsAPI `json:"metricsAPI"`
 }
 
 // Conductor describes the Conductor instance the operator polls.
@@ -58,12 +56,12 @@ type Conductor struct {
 	// var as https://${DBOS_DOMAIN}/conductor/v1alpha1.
 	Endpoint string `json:"endpoint,omitempty"`
 
-	// OrgName is the Conductor organization name (Conductor resolves the
-	// internal org ID server-side).
+	// OrgName is the Conductor organization name
 	OrgName string `json:"orgName"`
 
 	// JWTPath is the filesystem path to a file containing the bearer JWT.
 	// Typically a Secret mounted as a file. Read once at startup.
+	// TODO: will be used for an m2m token eventually
 	JWTPath string `json:"jwtPath"`
 
 	// InsecureSkipVerify disables TLS verification of the Conductor endpoint.
