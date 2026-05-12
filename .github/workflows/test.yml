@@ -23,6 +23,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: go vet
+        run: make vet
+
       - name: Running Tests
         run: |
           go mod tidy
