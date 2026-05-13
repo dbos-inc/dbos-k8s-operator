@@ -53,7 +53,7 @@ func main() {
 	if err != nil {
 		fatal("load config: %v", err)
 	}
-	jwt, err := config.LoadJWT(cfg.Conductor.JWTPath)
+	jwt, err := config.LoadJWT()
 	if err != nil {
 		fatal("load jwt: %v", err)
 	}

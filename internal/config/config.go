@@ -59,15 +59,14 @@ type Conductor struct {
 	// OrgName is the Conductor organization name
 	OrgName string `json:"orgName"`
 
-	// JWTPath is the filesystem path to a file containing the bearer JWT.
-	// Typically a Secret mounted as a file. Read once at startup.
-	// TODO: will be used for an m2m token eventually
-	JWTPath string `json:"jwtPath"`
-
 	// InsecureSkipVerify disables TLS verification of the Conductor endpoint.
 	// Only for local/dev clusters.
 	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
 }
+
+// JWTEnvVar is the environment variable from which LoadJWT reads the bearer
+// JWT. Populated in the Deployment from a Secret via env.valueFrom.secretKeyRef.
+const JWTEnvVar = "DBOS_CONDUCTOR_JWT"
 
 // Poller controls per-app queue-metric poll cadence. All apps share these knobs.
 type Poller struct {
@@ -115,17 +114,13 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// LoadJWT reads the bearer token from the file referenced by Conductor.JWTPath
-// and returns its trimmed contents. Called separately from Load so the JWT can
-// be re-read on rotation in the future without re-parsing the whole config.
-func LoadJWT(path string) (string, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read jwt %s: %w", path, err)
-	}
-	tok := strings.TrimSpace(string(raw))
+// LoadJWT reads the bearer token from the DBOS_CONDUCTOR_JWT environment
+// variable and returns its trimmed contents. Called separately from Load so
+// the JWT source can change independently of the YAML config.
+func LoadJWT() (string, error) {
+	tok := strings.TrimSpace(os.Getenv(JWTEnvVar))
 	if tok == "" {
-		return "", fmt.Errorf("jwt file %s is empty", path)
+		return "", fmt.Errorf("%s is unset or empty", JWTEnvVar)
 	}
 	return tok, nil
 }
@@ -142,9 +137,6 @@ func (c *Config) applyDefaults() {
 func (c *Config) validate() error {
 	if c.Conductor.OrgName == "" {
 		return errors.New("conductor.orgName is required")
-	}
-	if c.Conductor.JWTPath == "" {
-		return errors.New("conductor.jwtPath is required")
 	}
 	if len(c.Apps) == 0 {
 		return errors.New("at least one app must be configured")

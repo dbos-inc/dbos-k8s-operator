@@ -52,9 +52,6 @@ conductor:
   # Conductor org name. "local" for self hosted without OAuth.
   orgName: local
 
-  # Path to the bearer JWT file. Mounted from the `conductor-jwt` Secret.
-  jwtPath: /var/run/secrets/conductor/token
-
   # When self-hosting Conductor, full base URL of Conductor's HTTP API up through any cloud path prefix.
   # Not necessary when using DBOS-managed Conductor
   endpoint: http://conductor.dbos-conductor.svc.cluster.local:8090

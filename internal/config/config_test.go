@@ -56,7 +56,6 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	p := writeConfig(t, `
 conductor:
   orgName: org
-  jwtPath: /tmp/jwt
 apps:
   - name: app1
 `)
@@ -77,7 +76,6 @@ func TestLoadParsesUserValues(t *testing.T) {
 conductor:
   orgName: my-org
   endpoint: http://conductor.local:8090
-  jwtPath: /var/run/jwt
   insecureSkipVerify: true
 poller:
   interval: 2s
@@ -124,29 +122,17 @@ func TestLoadValidationErrors(t *testing.T) {
 		{
 			name: "missing orgName",
 			yaml: `
-conductor:
-  jwtPath: /tmp/jwt
+conductor: {}
 apps:
   - name: a
 `,
 			want: "orgName",
 		},
 		{
-			name: "missing jwtPath",
-			yaml: `
-conductor:
-  orgName: o
-apps:
-  - name: a
-`,
-			want: "jwtPath",
-		},
-		{
 			name: "no apps",
 			yaml: `
 conductor:
   orgName: o
-  jwtPath: /tmp/jwt
 apps: []
 `,
 			want: "at least one app",
@@ -156,7 +142,6 @@ apps: []
 			yaml: `
 conductor:
   orgName: o
-  jwtPath: /tmp/jwt
 apps:
   - name: ""
 `,
@@ -167,7 +152,6 @@ apps:
 			yaml: `
 conductor:
   orgName: o
-  jwtPath: /tmp/jwt
 poller:
   interval: 10s
   maxBackoff: 1s
@@ -199,12 +183,8 @@ func TestLoadMissingFile(t *testing.T) {
 }
 
 func TestLoadJWT(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "jwt")
-	if err := os.WriteFile(p, []byte("  hunter2  \n"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	tok, err := LoadJWT(p)
+	t.Setenv(JWTEnvVar, "  hunter2  \n")
+	tok, err := LoadJWT()
 	if err != nil {
 		t.Fatalf("LoadJWT: %v", err)
 	}
@@ -214,18 +194,15 @@ func TestLoadJWT(t *testing.T) {
 }
 
 func TestLoadJWTEmpty(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "jwt")
-	if err := os.WriteFile(p, []byte("   \n"), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-	if _, err := LoadJWT(p); err == nil {
-		t.Fatalf("expected error for empty jwt file")
+	t.Setenv(JWTEnvVar, "   \n")
+	if _, err := LoadJWT(); err == nil {
+		t.Fatalf("expected error for empty env var")
 	}
 }
 
 func TestLoadJWTMissing(t *testing.T) {
-	if _, err := LoadJWT("/nonexistent/jwt"); err == nil {
-		t.Fatalf("expected error for missing jwt file")
+	t.Setenv(JWTEnvVar, "")
+	if _, err := LoadJWT(); err == nil {
+		t.Fatalf("expected error for unset env var")
 	}
 }

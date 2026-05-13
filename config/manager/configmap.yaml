@@ -7,9 +7,8 @@ data:
   config.yaml: |
     # DBOS Kubernetes Operator config. Mounted into the pod at /etc/dbos-operator/config.yaml.
     conductor:
-      orgName: local
-      jwtPath: /var/run/secrets/conductor/token
-      endpoint: http://conductor.dbos-conductor.svc.cluster.local:8090
+      orgName: max
+      # endpoint: http://conductor.dbos-conductor.svc.cluster.local:8090
     poller:
       interval: 1s
       maxBackoff: 30s

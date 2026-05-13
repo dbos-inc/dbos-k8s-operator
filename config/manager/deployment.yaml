@@ -43,6 +43,15 @@ spec:
             # spec.conductor.endpoint is given in the operator config.
             - name: DBOS_DOMAIN
               value: cloud.dbos.dev
+            # Bearer JWT for Conductor. Created by the operator user before
+            # first deploy:
+            #   kubectl -n dbos-operator create secret generic conductor-jwt \
+            #     --from-literal=token=<JWT>
+            - name: DBOS_CONDUCTOR_JWT
+              valueFrom:
+                secretKeyRef:
+                  name: conductor-jwt
+                  key: token
           ports:
             - name: metrics-api
               containerPort: 6443
@@ -78,9 +87,6 @@ spec:
               mountPath: /etc/dbos-operator/config.yaml
               subPath: config.yaml
               readOnly: true
-            - name: conductor-jwt
-              mountPath: /var/run/secrets/conductor
-              readOnly: true
             - name: serving-cert
               mountPath: /etc/dbos-operator/certs
               readOnly: true
@@ -88,11 +94,6 @@ spec:
         - name: config
           configMap:
             name: dbos-operator
-        - name: conductor-jwt
-          secret:
-            # Created by the operator user before first deploy:
-            #   kubectl -n dbos-operator create secret generic conductor-jwt --from-literal=token=<JWT>
-            secretName: conductor-jwt
         - name: serving-cert
           secret:
             # Either populated by cert-manager (config/cert-manager/certificate.yaml)
