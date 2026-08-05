@@ -1,0 +1,74 @@
+# DBOSApplication for the python starter on the dev EKS cluster. The pod
+# template below is the cached pre-CRD Deployment template verbatim (see
+# atlas eks-cluster-manifests.md); the operator wraps it in a Deployment it
+# owns. Replicas are not declared anywhere — KEDA scales the Deployment via
+# the operator's metrics endpoint.
+apiVersion: dbos.dev/v1alpha1
+kind: DBOSApplication
+metadata:
+  name: dbos-starter-python
+  namespace: dbos
+spec:
+  appName: dbos-starter-python
+  template:
+    metadata:
+      labels:
+        dbos.dev/starter: "true"
+    spec:
+      containers:
+        - name: app
+          image: 500883621673.dkr.ecr.us-east-1.amazonaws.com/dbos-starter-python:autoscale-test-3
+          imagePullPolicy: Always
+          env:
+            - name: DBOS_SYSTEM_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: dbos-app-db
+                  key: python-url
+            - name: DBOS_CONDUCTOR_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: dbos-app-config
+                  key: conductor-url
+            - name: DBOS_CONDUCTOR_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: dbos-app-conductor-key
+                  key: api-key
+            - name: SSL_CERT_FILE
+              value: /certs/ca.crt
+            - name: APP_BASE_PATH
+              value: /python/
+          ports:
+            - containerPort: 3001
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3001
+            initialDelaySeconds: 40
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3001
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: tls
+              mountPath: /certs
+              readOnly: true
+      volumes:
+        - name: tls
+          secret:
+            secretName: dbos-app-ca
+            items:
+              - key: ca.crt
+                path: ca.crt

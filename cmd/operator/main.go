@@ -1,53 +1,44 @@
-// Command operator runs the DBOS metrics operator: a single binary that polls
-// Conductor on a configured cadence and exposes per-queue load to HPA via the
-// External Metrics API. There is no controller-runtime, no CRD, and no leader
-// election — all configuration is static and loaded from a ConfigMap-mounted
-// YAML file.
+// Command operator runs the DBOS operator: a single binary that owns each
+// DBOSApplication's Deployment (reconciled from the CR via server-side apply),
+// polls Conductor for the desired executor count implied by the app's stored
+// autoscaling policy, and serves that count over plain HTTP for KEDA's
+// metrics-api scaler. There is no controller-runtime and no leader election;
+// state is a CR list re-read every reconcile interval.
 package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/component-base/logs"
 	"k8s.io/klog/v2"
-	basecmd "sigs.k8s.io/custom-metrics-apiserver/pkg/cmd"
 
+	"github.com/dbos-inc/dbos-k8s-operator/internal/conductor"
 	"github.com/dbos-inc/dbos-k8s-operator/internal/config"
-	"github.com/dbos-inc/dbos-k8s-operator/internal/metricsadapter"
-	"github.com/dbos-inc/dbos-k8s-operator/internal/poller"
+	"github.com/dbos-inc/dbos-k8s-operator/internal/kube"
+	"github.com/dbos-inc/dbos-k8s-operator/internal/metricshttp"
 	"github.com/dbos-inc/dbos-k8s-operator/internal/store"
 )
-
-// adapter wires our External Metrics provider onto AdapterBase. AdapterBase
-// owns the apiserver, TLS termination, and aggregated-API delegation.
-type adapter struct {
-	basecmd.AdapterBase
-}
 
 func main() {
 	logs.InitLogs()
 	defer logs.FlushLogs()
 
 	configPath := flag.String("config", "/etc/dbos-operator/config.yaml", "path to the operator config YAML (mounted from a ConfigMap)")
-
-	// klog registers its own flags (-v, -log_dir, ...) onto flag.CommandLine so
-	// AddGoFlagSet below exposes them as pflag long-form (--v=2) for the Adapter.
+	kubeconfig := flag.String("kubeconfig", "", "path to a kubeconfig; empty uses in-cluster config")
 	klog.InitFlags(nil)
-
-	// AdapterBase registers its own flag set. We share os.Args with it so its
-	// --secure-port / --tls-cert-file / --tls-private-key-file / klog flags
-	// are picked up too.
-	a := &adapter{}
-	a.Flags().AddGoFlagSet(flag.CommandLine)
-	if err := a.Flags().Parse(os.Args[1:]); err != nil {
-		fatal("parse flags: %v", err)
-	}
+	flag.Parse()
 
 	cfg, err := config.Load(*configPath)
 	if err != nil {
@@ -58,11 +49,30 @@ func main() {
 		fatal("load jwt: %v", err)
 	}
 
+	conductorClient, err := conductor.New(conductor.Options{
+		Endpoint:           cfg.Conductor.Endpoint,
+		OrgName:            cfg.Conductor.OrgName,
+		Token:              jwt,
+		InsecureSkipVerify: cfg.Conductor.InsecureSkipVerify,
+	})
+	if err != nil {
+		fatal("build conductor client: %v", err)
+	}
+
+	restCfg, err := loadRESTConfig(*kubeconfig)
+	if err != nil {
+		fatal("load kubernetes config: %v", err)
+	}
+	dynClient, err := dynamic.NewForConfig(restCfg)
+	if err != nil {
+		fatal("build kubernetes client: %v", err)
+	}
+
 	klog.InfoS("starting dbos-operator",
-		"apps", len(cfg.Apps),
-		"interval", cfg.Poller.Interval.Native(),
-		"maxBackoff", cfg.Poller.MaxBackoff.Native(),
-		"metricsAPI", cfg.MetricsAPI.Enabled,
+		"namespace", cfg.Kubernetes.Namespace,
+		"reconcileInterval", cfg.Kubernetes.ReconcileInterval.Native(),
+		"pollInterval", cfg.Poller.Interval.Native(),
+		"listen", cfg.HTTP.Listen,
 	)
 
 	s := store.NewInMemory()
@@ -72,41 +82,59 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	// One poller goroutine per configured app.
-	for _, app := range cfg.Apps {
-		pcfg := poller.Config{
-			AppName:     app.Name,
-			OrgName:     cfg.Conductor.OrgName,
-			Endpoint:    cfg.Conductor.Endpoint,
-			Token:       jwt,
-			InsecureTLS: cfg.Conductor.InsecureSkipVerify,
-			Interval:    cfg.Poller.Interval.Native(),
-			MaxBackoff:  cfg.Poller.MaxBackoff.Native(),
+	// Start the background manager that reconciles CRs and polls Conductor for the desired executor count.
+	manager := kube.NewManager(kube.Options{
+		Client:            dynClient,
+		Conductor:         conductorClient,
+		Store:             s,
+		Namespace:         cfg.Kubernetes.Namespace,
+		ReconcileInterval: cfg.Kubernetes.ReconcileInterval.Native(),
+		PollInterval:      cfg.Poller.Interval.Native(),
+		PollMaxBackoff:    cfg.Poller.MaxBackoff.Native(),
+	})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		manager.Run(ctx)
+	}()
+
+	// Start the HTTP server that serves the desired executor count for KEDA's metrics API.
+	server := &http.Server{
+		Addr:              cfg.HTTP.Listen,
+		Handler:           metricshttp.NewServer(s).Handler(),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		klog.InfoS("metrics HTTP endpoint listening", "addr", cfg.HTTP.Listen)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			klog.ErrorS(err, "metrics HTTP endpoint exited")
+			cancel()
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			poller.Run(ctx, pcfg, s)
-		}()
-	}
+	}()
 
-	// External Metrics API server (HTTPS, aggregated). Blocks until ctx is cancelled.
-	if cfg.MetricsAPI.Enabled {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			a.WithExternalMetrics(metricsadapter.New(s))
-			klog.InfoS("starting external metrics adapter")
-			if err := a.Run(ctx); err != nil {
-				klog.ErrorS(err, "external metrics adapter exited")
-			}
-		}()
-	} else {
-		klog.InfoS("external metrics adapter disabled by config")
-	}
-
+	<-ctx.Done()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+	_ = server.Shutdown(shutdownCtx)
 	wg.Wait()
 	klog.InfoS("operator shutdown complete")
+}
+
+// loadRESTConfig prefers in-cluster config and falls back to the given (or
+// default) kubeconfig for local development.
+func loadRESTConfig(kubeconfig string) (*rest.Config, error) {
+	if kubeconfig == "" {
+		if cfg, err := rest.InClusterConfig(); err == nil {
+			return cfg, nil
+		}
+	}
+	rules := clientcmd.NewDefaultClientConfigLoadingRules()
+	if kubeconfig != "" {
+		rules.ExplicitPath = kubeconfig
+	}
+	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, &clientcmd.ConfigOverrides{}).ClientConfig()
 }
 
 func fatal(format string, args ...any) {

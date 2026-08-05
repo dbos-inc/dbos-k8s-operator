@@ -1,113 +1,75 @@
-// Package store is the shared in-process metric store. The poller writes
-// observations; the External Metrics adapter, the Prometheus exporter, and
-// (later) the KEDA scaler read from it. The Store is an interface so that
-// in-memory can be swapped for a TTL-evicting variant or a Redis-backed
-// implementation without touching its consumers.
+// Package store is the shared in-process result store. Each app's poller
+// writes the latest Conductor autoscale response; the HTTP metrics endpoint
+// (polled by KEDA) and the CR status updater read from it. The Store is an
+// interface so in-memory can be swapped without touching its consumers.
 package store
 
 import (
 	"sync"
 	"time"
+
+	"github.com/dbos-inc/dbos-k8s-operator/internal/conductor"
 )
 
-// Sample is a point-in-time observation of one queue's load.
-type Sample struct {
-	Depth             int64
-	WorkerConcurrency int32
-	Load              float64 // (ENQUEUED + PENDING) / WorkerConcurrency
-	ObservedAt        time.Time
+// Result is the latest successful queue-based-autoscaling poll for one app.
+type Result struct {
+	// Body is the latest version's entry of Conductor's response, verbatim
+	// (snake_case v1 JSON), re-served as-is to KEDA so its valueLocation
+	// (desired_executors) keeps working.
+	Body             []byte
+	DesiredExecutors int
+	ObservedAt       int64     // epoch ms the aggregate was computed (from the response)
+	PolledAt         time.Time // when this poll completed
+	// OldVersions are the response's non-latest entries: older application
+	// versions still holding work, each needing executors of its own version.
+	OldVersions []conductor.VersionRecommendation
+	// NoPolicy records that Conductor answered 404 — the app has no
+	// autoscaling policy installed. Body is empty; the metrics endpoint 404s
+	// so the HPA holds the current replica count.
+	NoPolicy bool
 }
 
-// Key identifies one queue observation.
-type Key struct {
-	App   string
-	Queue string
-}
-
-// KeyedSample pairs a Key with its Sample. Returned by readers so callers
-// can iterate without exposing the underlying map.
-type KeyedSample struct {
-	Key
-	Sample
-}
-
-// Store is the abstraction over our in-process metrics store.
+// Store is the abstraction over the in-process result store.
 type Store interface {
-	// Set replaces the sample under k.
-	Set(k Key, s Sample)
+	// Set replaces the app's latest result.
+	Set(app string, r Result)
 
-	// Get returns the sample under k, or false if absent.
-	Get(k Key) (Sample, bool)
+	// Get returns the app's latest result, or false if it has none.
+	Get(app string) (Result, bool)
 
-	// Delete removes a single entry; no-op if absent.
-	Delete(k Key)
+	// Delete removes an app's result; no-op if absent.
+	Delete(app string)
 
-	// List returns every entry. Callers must not mutate the returned slice.
-	List() []KeyedSample
-
-	// Apps returns the distinct app names that currently have at least one
-	// sample. Used by the External Metrics adapter to evaluate HPA label
-	// selectors against the set of observed apps.
+	// Apps returns the app names that currently have a result.
 	Apps() []string
-
-	// ByApp returns every sample for app. Nil if app is unknown.
-	ByApp(app string) []KeyedSample
 }
 
 type InMemory struct {
 	mu    sync.RWMutex
-	byApp map[string]map[string]Sample
+	byApp map[string]Result
 }
 
 func NewInMemory() *InMemory {
-	return &InMemory{byApp: make(map[string]map[string]Sample)}
+	return &InMemory{byApp: make(map[string]Result)}
 }
 
-func (s *InMemory) Set(k Key, sample Sample) {
+func (s *InMemory) Set(app string, r Result) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	queues, ok := s.byApp[k.App]
-	if !ok {
-		queues = make(map[string]Sample)
-		s.byApp[k.App] = queues
-	}
-	queues[k.Queue] = sample
+	s.byApp[app] = r
 }
 
-func (s *InMemory) Get(k Key) (Sample, bool) {
+func (s *InMemory) Get(app string) (Result, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	queues, ok := s.byApp[k.App]
-	if !ok {
-		return Sample{}, false
-	}
-	v, ok := queues[k.Queue]
-	return v, ok
+	r, ok := s.byApp[app]
+	return r, ok
 }
 
-func (s *InMemory) Delete(k Key) {
+func (s *InMemory) Delete(app string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	queues, ok := s.byApp[k.App]
-	if !ok {
-		return
-	}
-	delete(queues, k.Queue)
-	if len(queues) == 0 {
-		delete(s.byApp, k.App)
-	}
-}
-
-func (s *InMemory) List() []KeyedSample {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var out []KeyedSample
-	for app, queues := range s.byApp {
-		for q, v := range queues {
-			out = append(out, KeyedSample{Key: Key{App: app, Queue: q}, Sample: v})
-		}
-	}
-	return out
+	delete(s.byApp, app)
 }
 
 func (s *InMemory) Apps() []string {
@@ -116,20 +78,6 @@ func (s *InMemory) Apps() []string {
 	out := make([]string, 0, len(s.byApp))
 	for app := range s.byApp {
 		out = append(out, app)
-	}
-	return out
-}
-
-func (s *InMemory) ByApp(app string) []KeyedSample {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	queues, ok := s.byApp[app]
-	if !ok {
-		return nil
-	}
-	out := make([]KeyedSample, 0, len(queues))
-	for q, v := range queues {
-		out = append(out, KeyedSample{Key: Key{App: app, Queue: q}, Sample: v})
 	}
 	return out
 }

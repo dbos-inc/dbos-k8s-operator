@@ -1,13 +1,14 @@
 // Package conductor is a minimal bearer-JWT REST client for the Conductor API.
-// Only the read paths the operator needs for queue load are implemented:
-// ListQueues (for worker_concurrency discovery) and QueueDepth (count of
-// ENQUEUED+PENDING workflows on a queue).
+// Only the one read path the operator needs is implemented: QueueAutoscale,
+// the queue-based-autoscaling recommendation Conductor computes from the
+// application's stored autoscaling policy (404 when none is installed).
 package conductor
 
 import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,6 +18,11 @@ import (
 	"time"
 )
 
+// ErrNoPolicy reports that Conductor answered the autoscale request with 404:
+// the application has no stored autoscaling policy (or does not exist), so
+// there is no recommendation to act on. A normal state, not a failure.
+var ErrNoPolicy = errors.New("no autoscaling policy")
+
 const defaultDomain = "cloud.dbos.dev"
 
 // defaultCloudPathPrefix is the path prefix DBOS Cloud uses to route to
@@ -24,15 +30,28 @@ const defaultDomain = "cloud.dbos.dev"
 // just /api, so users override Endpoint with the appropriate base URL.
 const defaultCloudPathPrefix = "/conductor/v1alpha1"
 
-type Queue struct {
-	Name              string `json:"name"`
-	Concurrency       *int   `json:"concurrency"`
-	WorkerConcurrency *int   `json:"worker_concurrency"`
+// VersionRecommendation is one application version's entry in a
+// queue-based-autoscaling response.
+type VersionRecommendation struct {
+	ApplicationVersion string
+	IsLatest           bool
+	DesiredExecutors   int
+	ObservedAt         int64 // epoch ms the aggregate was computed, from the response
 }
 
-// workflow is what we decode QueueDepth's array elements into
-type workflow struct {
-	WorkflowUUID string `json:"WorkflowUUID"`
+// AutoscaleResult is a decoded queue-based-autoscaling response. Body is the
+// latest version's entry, raw JSON exactly as Conductor served it (snake_case
+// v1 form), so it can be re-served verbatim to KEDA's metrics-api scaler,
+// whose valueLocation reads a single object; the parsed fields mirror that
+// entry for logging and CR status updates. OldVersions carries the remaining
+// entries — older versions that still hold work and need executors of their
+// own — in Conductor's order (most recently registered first).
+type AutoscaleResult struct {
+	Body               []byte
+	ApplicationVersion string
+	DesiredExecutors   int
+	ObservedAt         int64
+	OldVersions        []VersionRecommendation
 }
 
 // Options configures a Client.
@@ -111,56 +130,92 @@ func resolveBaseURL(endpoint string) (string, error) {
 	return domain + defaultCloudPathPrefix, nil
 }
 
-func (c *Client) ListQueues(ctx context.Context, app string) ([]Queue, error) {
-	path := fmt.Sprintf("/api/%s/applications/%s/queues", url.PathEscape(c.orgName), url.PathEscape(app))
-	var out []Queue
-	if err := c.do(ctx, http.MethodGet, path, nil, &out); err != nil {
-		return nil, fmt.Errorf("ListQueues %s: %w", app, err)
-	}
-	return out, nil
-}
-
-// queueDepthBody is the POST body Conductor's ListQueuedWorkflows expects.
-// We filter on the queue name and statuses ENQUEUED + PENDING. Limit is set
-// to a soft cap; if a queue is deeper than this we under-report (acceptable
-// for HPA's purposes — well into "scale to max" territory anyway).
-type queueDepthBody struct {
-	QueueName []string `json:"queue_name"`
-	Status    []string `json:"status"`
-	Limit     int      `json:"limit"`
-}
-
-// QueueDepth returns the number of workflows in ENQUEUED or PENDING state for
-// the named queue.
+// QueueAutoscale asks Conductor how many executors the app needs right now.
+// The computation is driven entirely by the application's stored autoscaling
+// policy; returns ErrNoPolicy on 404 (no policy installed).
 //
-//	POST <base>/api/<orgName>/applications/<app>/queues/
-//	  body: {queue_name: [<queue>], status: ["ENQUEUED","PENDING"], limit: 10000}
-func (c *Client) QueueDepth(ctx context.Context, app, queue string) (int64, error) {
-	path := fmt.Sprintf("/api/%s/applications/%s/queues/", url.PathEscape(c.orgName), url.PathEscape(app))
-	body := queueDepthBody{
-		QueueName: []string{queue},
-		Status:    []string{"ENQUEUED", "PENDING"},
-		Limit:     10000, // TODO: this could be made configurable. For now, reasonable soft cap.
+// Conductor answers with one entry per application version — the latest first,
+// then every older version still holding work; a version with no remaining
+// work at all is absent. The latest entry is re-served to KEDA, which scales
+// the app's main Deployment; the older entries are returned so the manager can
+// maintain (for now: report) per-version Deployments for them.
+//
+//	GET <base>/api/<orgName>/applications/<app>/autoscale
+//	  → [{"application_version": "...", "is_latest": true, "desired_executors": N, "observed_at": ms}, ...]
+func (c *Client) QueueAutoscale(ctx context.Context, app string) (*AutoscaleResult, error) {
+	path := fmt.Sprintf("/api/%s/applications/%s/autoscale", url.PathEscape(c.orgName), url.PathEscape(app))
+	// Decoded twice: once to parse the entries, once to keep the latest
+	// entry's bytes intact for KEDA.
+	var entries []json.RawMessage
+	if _, err := c.do(ctx, http.MethodGet, path, nil, &entries); err != nil {
+		var he *HTTPError
+		if errors.As(err, &he) && he.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("QueueAutoscale %s: %w", app, ErrNoPolicy)
+		}
+		return nil, fmt.Errorf("QueueAutoscale %s: %w", app, err)
 	}
-	var out []workflow
-	if err := c.do(ctx, http.MethodPost, path, body, &out); err != nil {
-		return 0, fmt.Errorf("QueueDepth %s/%s: %w", app, queue, err)
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("QueueAutoscale %s: no recommendation returned", app)
 	}
-	return int64(len(out)), nil
+	type entry struct {
+		ApplicationVersion string `json:"application_version"`
+		IsLatest           bool   `json:"is_latest"`
+		DesiredExecutors   int    `json:"desired_executors"`
+		ObservedAt         int64  `json:"observed_at"`
+	}
+	result := &AutoscaleResult{}
+	for _, raw := range entries {
+		var e entry
+		if err := json.Unmarshal(raw, &e); err != nil {
+			return nil, fmt.Errorf("QueueAutoscale %s: decode entry: %w", app, err)
+		}
+		// The latest version leads the array; keying on the flag keeps this
+		// working if that ever stops holding.
+		if e.IsLatest && result.Body == nil {
+			result.Body = raw
+			result.ApplicationVersion = e.ApplicationVersion
+			result.DesiredExecutors = e.DesiredExecutors
+			result.ObservedAt = e.ObservedAt
+			continue
+		}
+		result.OldVersions = append(result.OldVersions, VersionRecommendation{
+			ApplicationVersion: e.ApplicationVersion,
+			IsLatest:           e.IsLatest,
+			DesiredExecutors:   e.DesiredExecutors,
+			ObservedAt:         e.ObservedAt,
+		})
+	}
+	if result.Body == nil {
+		return nil, fmt.Errorf("QueueAutoscale %s: no is_latest entry in %d-entry response", app, len(entries))
+	}
+	return result, nil
 }
 
-func (c *Client) do(ctx context.Context, method, path string, in any, out any) error {
+// HTTPError is a non-2xx Conductor response.
+type HTTPError struct {
+	StatusCode int
+	Status     string
+	Body       string
+}
+
+func (e *HTTPError) Error() string {
+	return e.Status + ": " + e.Body
+}
+
+// do performs one request and returns the raw response body (also decoding it
+// into out when out is non-nil).
+func (c *Client) do(ctx context.Context, method, path string, in any, out any) ([]byte, error) {
 	var body io.Reader
 	if in != nil {
 		buf, err := json.Marshal(in)
 		if err != nil {
-			return fmt.Errorf("marshal request: %w", err)
+			return nil, fmt.Errorf("marshal request: %w", err)
 		}
 		body = strings.NewReader(string(buf))
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/json")
@@ -169,15 +224,22 @@ func (c *Client) do(ctx context.Context, method, path string, in any, out any) e
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
 	if resp.StatusCode >= 400 {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("%s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(b)))
+		return nil, fmt.Errorf("%s %s: %w", method, path,
+			&HTTPError{StatusCode: resp.StatusCode, Status: resp.Status, Body: strings.TrimSpace(string(raw))})
 	}
 	if out == nil {
-		return nil
+		return raw, nil
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	if err := json.Unmarshal(raw, out); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	return raw, nil
 }

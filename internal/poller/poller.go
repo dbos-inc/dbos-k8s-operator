@@ -1,11 +1,14 @@
-// Package poller runs one goroutine per configured DBOS app. The goroutine
-// drives a single ticker against a Conductor client: each tick queries every
-// queue's depth + worker_concurrency and writes a Sample to the shared store
-// for HPA. Exponential backoff (capped at MaxBackoff) on failures.
+// Package poller runs one goroutine per DBOSApplication. Each tick it asks
+// Conductor for the desired executor count — Conductor computes it from the
+// app's stored autoscaling policy, so policy edits take effect within one
+// interval, no restart — and writes the response to the shared store for the
+// KEDA-facing HTTP endpoint. Exponential backoff (capped at MaxBackoff) on
+// failures.
 package poller
 
 import (
 	"context"
+	"errors"
 	"math/rand"
 	"time"
 
@@ -17,40 +20,32 @@ import (
 
 // Config is the per-app configuration the poller runs against.
 type Config struct {
-	AppName     string
-	OrgName     string
-	Endpoint    string // forwarded to conductor.New; may be empty
-	Token       string
-	InsecureTLS bool
-	Interval    time.Duration
-	MaxBackoff  time.Duration
+	AppName    string
+	Interval   time.Duration
+	MaxBackoff time.Duration
+
+	// OnResult, when set, is invoked after every successful tick (used by the
+	// kube manager to update the DBOSApplication's status).
+	OnResult func(r store.Result)
 }
 
-func Run(ctx context.Context, cfg Config, s store.Store) {
+// Run polls until ctx is cancelled. The store entry is deleted on exit so a
+// removed app stops being served rather than going stale.
+func Run(ctx context.Context, cfg Config, client *conductor.Client, s store.Store) {
 	logger := klog.FromContext(ctx).WithValues("app", cfg.AppName)
 
-	client, err := conductor.New(conductor.Options{
-		Endpoint:           cfg.Endpoint,
-		OrgName:            cfg.OrgName,
-		Token:              cfg.Token,
-		InsecureSkipVerify: cfg.InsecureTLS,
-	})
-	if err != nil {
-		logger.Error(err, "build conductor client; poller for app will not run")
-		return
-	}
-
 	backoff := cfg.Interval
-	metricTimer := time.NewTimer(0) // first metric tick immediate
-	defer metricTimer.Stop()
+	timer := time.NewTimer(0) // first tick immediate
+	defer timer.Stop()
+	defer s.Delete(cfg.AppName)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-metricTimer.C:
-			anyErr := tickApp(ctx, client, cfg, s, logger)
-			if anyErr {
+		case <-timer.C:
+			if err := tick(ctx, cfg, client, s, logger); err != nil {
+				logger.V(2).Error(err, "poll tick failed")
 				backoff *= 2
 				if backoff > cfg.MaxBackoff {
 					backoff = cfg.MaxBackoff
@@ -58,72 +53,46 @@ func Run(ctx context.Context, cfg Config, s store.Store) {
 			} else {
 				backoff = cfg.Interval
 			}
-			metricTimer.Reset(jitter(backoff))
+			timer.Reset(jitter(backoff))
 		}
 	}
 }
 
-// tickApp discovers the app's queues from Conductor, then polls each one's
-// depth. Queues without worker_concurrency are skipped (load is undefined).
-// Returns true if discovery or any individual depth poll failed.
-func tickApp(ctx context.Context, client *conductor.Client, cfg Config, s store.Store, logger klog.Logger) bool {
-	pollCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+// tick fetches the autoscale recommendation and stores the result. A failed
+// tick leaves the previous result in place — the HTTP endpoint applies its
+// own staleness cutoff.
+func tick(ctx context.Context, cfg Config, client *conductor.Client, s store.Store, logger klog.Logger) error {
+	tickCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	queues, err := client.ListQueues(pollCtx, cfg.AppName)
-	if err != nil {
-		logger.V(2).Info("ListQueues failed", "err", err)
-		return true
-	}
-
-	anyErr := false
-	live := make(map[string]struct{}, len(queues))
-	for _, q := range queues {
-		if q.WorkerConcurrency == nil || *q.WorkerConcurrency <= 0 {
-			logger.V(2).Info("queue has no worker_concurrency; skipping", "queue", q.Name, "workerConcurrency", q.WorkerConcurrency)
-			continue
+	res, err := client.QueueAutoscale(tickCtx, cfg.AppName)
+	if errors.Is(err, conductor.ErrNoPolicy) {
+		// A normal state, not a failure: keep polling at the regular interval
+		// so an installed policy takes effect within one tick.
+		r := store.Result{NoPolicy: true, PolledAt: time.Now()}
+		logger.V(2).Info("polled", "noPolicy", true)
+		s.Set(cfg.AppName, r)
+		if cfg.OnResult != nil {
+			cfg.OnResult(r)
 		}
-		if err := pollQueueDepth(pollCtx, client, cfg.AppName, q, s, logger); err != nil {
-			anyErr = true
-			logger.V(2).Error(err, "queue depth poll failed", "queue", q.Name)
-			continue
-		}
-		live[q.Name] = struct{}{}
+		return nil
 	}
-
-	// Evict store entries for queues that no longer exist (or that lost their
-	// worker_concurrency between ticks). Without this, the max-aggregation
-	// would keep returning a stale value indefinitely.
-	for _, e := range s.ByApp(cfg.AppName) {
-		if _, ok := live[e.Queue]; !ok {
-			logger.V(1).Info("evicting stale queue sample", "queue", e.Queue, "lastObservedAt", e.ObservedAt)
-			s.Delete(e.Key)
-		}
-	}
-	return anyErr
-}
-
-// pollQueueDepth fetches one queue's depth and writes a Sample to the store.
-// Caller has already verified worker_concurrency is set.
-func pollQueueDepth(ctx context.Context, client *conductor.Client, app string, q conductor.Queue, s store.Store, logger klog.Logger) error {
-	depth, err := client.QueueDepth(ctx, app, q.Name)
 	if err != nil {
 		return err
 	}
-	wc := int32(*q.WorkerConcurrency)
-	load := float64(depth) / float64(wc)
-	logger.V(2).Info("queue polled",
-		"queue", q.Name,
-		"depth", depth,
-		"workerConcurrency", wc,
-		"load", load)
-	s.Set(store.Key{App: app, Queue: q.Name},
-		store.Sample{
-			Depth:             depth,
-			WorkerConcurrency: wc,
-			Load:              load,
-			ObservedAt:        time.Now(),
-		})
+
+	r := store.Result{
+		Body:             res.Body,
+		DesiredExecutors: res.DesiredExecutors, // Latest versions
+		ObservedAt:       res.ObservedAt,
+		OldVersions:      res.OldVersions,
+		PolledAt:         time.Now(),
+	}
+	logger.V(2).Info("polled", "desiredExecutors", r.DesiredExecutors, "oldVersions", len(r.OldVersions))
+	s.Set(cfg.AppName, r)
+	if cfg.OnResult != nil {
+		cfg.OnResult(r)
+	}
 	return nil
 }
 

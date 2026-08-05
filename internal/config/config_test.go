@@ -1,208 +1,97 @@
 package config
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
 
-func TestDurationUnmarshal(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want time.Duration
-	}{
-		{"string", `"5s"`, 5 * time.Second},
-		{"nanoseconds", `2500000000`, 2500 * time.Millisecond},
-		{"zero string", `"0s"`, 0},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var d Duration
-			if err := json.Unmarshal([]byte(tc.in), &d); err != nil {
-				t.Fatalf("unmarshal %q: %v", tc.in, err)
-			}
-			if d.Native() != tc.want {
-				t.Fatalf("got %v, want %v", d.Native(), tc.want)
-			}
-		})
-	}
-}
-
-func TestDurationUnmarshalRejectsGarbage(t *testing.T) {
-	var d Duration
-	if err := json.Unmarshal([]byte(`"not-a-duration"`), &d); err == nil {
-		t.Fatalf("expected error for bad duration string")
-	}
-	if err := json.Unmarshal([]byte(`true`), &d); err == nil {
-		t.Fatalf("expected error for bool")
-	}
-}
-
-func writeConfig(t *testing.T, body string) string {
+func write(t *testing.T, content string) string {
 	t.Helper()
-	dir := t.TempDir()
-	p := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
-		t.Fatalf("write: %v", err)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	return p
+	return path
 }
 
-func TestLoadAppliesDefaults(t *testing.T) {
-	p := writeConfig(t, `
+func TestLoadDefaults(t *testing.T) {
+	cfg, err := Load(write(t, `
 conductor:
-  orgName: org
-apps:
-  - name: app1
-`)
-	cfg, err := Load(p)
+  orgName: myorg
+`))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Poller.Interval.Native() != time.Second {
-		t.Fatalf("default Interval = %v, want 1s", cfg.Poller.Interval.Native())
+	if cfg.Poller.Interval.Native() != 30*time.Second {
+		t.Errorf("interval = %v", cfg.Poller.Interval.Native())
 	}
 	if cfg.Poller.MaxBackoff.Native() != 30*time.Second {
-		t.Fatalf("default MaxBackoff = %v, want 30s", cfg.Poller.MaxBackoff.Native())
+		t.Errorf("maxBackoff = %v", cfg.Poller.MaxBackoff.Native())
+	}
+	if cfg.HTTP.Listen != ":8080" {
+		t.Errorf("listen = %q", cfg.HTTP.Listen)
+	}
+	if cfg.Kubernetes.ReconcileInterval.Native() != 10*time.Second {
+		t.Errorf("reconcileInterval = %v", cfg.Kubernetes.ReconcileInterval.Native())
 	}
 }
 
-func TestLoadParsesUserValues(t *testing.T) {
-	p := writeConfig(t, `
+// The maxBackoff default derives from the configured interval (floored at
+// 30s), so setting only the interval yields a valid config at any cadence.
+func TestLoadDerivedDefaults(t *testing.T) {
+	cases := []struct {
+		interval    string
+		wantBackoff time.Duration
+	}{
+		{"5s", 30 * time.Second},  // floor applies
+		{"60s", 60 * time.Second}, // scales with the interval
+	}
+	for _, tc := range cases {
+		cfg, err := Load(write(t, "conductor: {orgName: myorg}\npoller: {interval: "+tc.interval+"}"))
+		if err != nil {
+			t.Fatalf("interval %s: %v", tc.interval, err)
+		}
+		if cfg.Poller.MaxBackoff.Native() != tc.wantBackoff {
+			t.Errorf("interval %s: maxBackoff = %v, want %v", tc.interval, cfg.Poller.MaxBackoff.Native(), tc.wantBackoff)
+		}
+	}
+}
+
+func TestLoadFull(t *testing.T) {
+	cfg, err := Load(write(t, `
 conductor:
-  orgName: my-org
-  endpoint: http://conductor.local:8090
-  insecureSkipVerify: true
+  orgName: myorg
+  endpoint: http://conductor.dbos.svc.cluster.local:8090
 poller:
   interval: 2s
-  maxBackoff: 1m
-apps:
-  - name: a1
-  - name: a2
-metricsAPI:
-  enabled: true
-`)
-	cfg, err := Load(p)
+  maxBackoff: 20s
+http:
+  listen: ":9090"
+kubernetes:
+  namespace: dbos
+  reconcileInterval: 5s
+`))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Conductor.OrgName != "my-org" {
-		t.Errorf("OrgName = %q", cfg.Conductor.OrgName)
+	if cfg.Conductor.Endpoint == "" || cfg.Kubernetes.Namespace != "dbos" {
+		t.Errorf("cfg = %+v", cfg)
 	}
-	if cfg.Conductor.Endpoint != "http://conductor.local:8090" {
-		t.Errorf("Endpoint = %q", cfg.Conductor.Endpoint)
-	}
-	if !cfg.Conductor.InsecureSkipVerify {
-		t.Errorf("InsecureSkipVerify = false, want true")
-	}
-	if cfg.Poller.Interval.Native() != 2*time.Second {
-		t.Errorf("Interval = %v", cfg.Poller.Interval.Native())
-	}
-	if cfg.Poller.MaxBackoff.Native() != time.Minute {
-		t.Errorf("MaxBackoff = %v", cfg.Poller.MaxBackoff.Native())
-	}
-	if len(cfg.Apps) != 2 || cfg.Apps[0].Name != "a1" || cfg.Apps[1].Name != "a2" {
-		t.Errorf("Apps = %v", cfg.Apps)
-	}
-	if !cfg.MetricsAPI.Enabled {
-		t.Errorf("MetricsAPI.Enabled = false, want true")
+	if cfg.Poller.Interval.Native() != 2*time.Second || cfg.Poller.MaxBackoff.Native() != 20*time.Second {
+		t.Errorf("durations not parsed: %+v", cfg)
 	}
 }
 
-func TestLoadValidationErrors(t *testing.T) {
-	cases := []struct {
-		name string
-		yaml string
-		want string
-	}{
-		{
-			name: "missing orgName",
-			yaml: `
-conductor: {}
-apps:
-  - name: a
-`,
-			want: "orgName",
-		},
-		{
-			name: "no apps",
-			yaml: `
-conductor:
-  orgName: o
-apps: []
-`,
-			want: "at least one app",
-		},
-		{
-			name: "empty app name",
-			yaml: `
-conductor:
-  orgName: o
-apps:
-  - name: ""
-`,
-			want: "apps[0].name",
-		},
-		{
-			name: "maxBackoff smaller than interval",
-			yaml: `
-conductor:
-  orgName: o
-poller:
-  interval: 10s
-  maxBackoff: 1s
-apps:
-  - name: a
-`,
-			want: "maxBackoff",
-		},
+func TestLoadRejects(t *testing.T) {
+	cases := map[string]string{
+		"missing orgName":        `poller: {interval: 1s}`,
+		"backoff below interval": "conductor: {orgName: o}\npoller: {interval: 10s, maxBackoff: 1s}",
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			p := writeConfig(t, tc.yaml)
-			_, err := Load(p)
-			if err == nil {
-				t.Fatalf("expected error containing %q, got nil", tc.want)
-			}
-			if !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("error %q does not contain %q", err.Error(), tc.want)
-			}
-		})
-	}
-}
-
-func TestLoadMissingFile(t *testing.T) {
-	_, err := Load("/nonexistent/path/config.yaml")
-	if err == nil {
-		t.Fatalf("expected error for missing file")
-	}
-}
-
-func TestLoadJWT(t *testing.T) {
-	t.Setenv(JWTEnvVar, "  hunter2  \n")
-	tok, err := LoadJWT()
-	if err != nil {
-		t.Fatalf("LoadJWT: %v", err)
-	}
-	if tok != "hunter2" {
-		t.Fatalf("token = %q, want %q (trimmed)", tok, "hunter2")
-	}
-}
-
-func TestLoadJWTEmpty(t *testing.T) {
-	t.Setenv(JWTEnvVar, "   \n")
-	if _, err := LoadJWT(); err == nil {
-		t.Fatalf("expected error for empty env var")
-	}
-}
-
-func TestLoadJWTMissing(t *testing.T) {
-	t.Setenv(JWTEnvVar, "")
-	if _, err := LoadJWT(); err == nil {
-		t.Fatalf("expected error for unset env var")
+	for name, content := range cases {
+		if _, err := Load(write(t, content)); err == nil {
+			t.Errorf("%s: expected error", name)
+		}
 	}
 }

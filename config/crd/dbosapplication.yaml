@@ -1,0 +1,85 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: dbosapplications.dbos.dev
+spec:
+  group: dbos.dev
+  scope: Namespaced
+  names:
+    kind: DBOSApplication
+    listKind: DBOSApplicationList
+    plural: dbosapplications
+    singular: dbosapplication
+    shortNames: [dbosapp]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Desired
+          type: integer
+          jsonPath: .status.desiredExecutors
+          description: Executors the app's queue backlog currently needs
+        - name: Polled
+          type: string
+          jsonPath: .status.lastPolledAt
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [template]
+              properties:
+                appName:
+                  type: string
+                  description: >-
+                    Conductor application name. Defaults to metadata.name.
+                strategy:
+                  description: >-
+                    Update strategy for the app's main Deployment, exactly as
+                    in Deployment.spec.strategy (type,
+                    rollingUpdate.maxSurge, rollingUpdate.maxUnavailable) —
+                    passed through verbatim. Setting rollingUpdate.maxSurge
+                    additionally budgets the old-version drain Deployments:
+                    latest replicas + maxSurge is the app's total pod
+                    allowance, and old versions share whatever surge headroom
+                    the latest Deployment isn't using (equal split capped at
+                    each version's recommendation; newest versions first when
+                    there are more versions than pods, the rest parked at 0
+                    until slots free). Without maxSurge, old versions are
+                    sized to their own recommendation, uncapped.
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                template:
+                  description: >-
+                    Pod template for the app, exactly as in
+                    Deployment.spec.template. The operator wraps it in a
+                    Deployment it owns (selector app=<name> is injected into
+                    the template labels). spec.replicas is intentionally not
+                    configurable: scaling belongs to the autoscaler pointed at
+                    the operator's metrics endpoint.
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              properties:
+                desiredExecutors:
+                  type: integer
+                  description: >-
+                    0 when the app has no autoscaling policy installed —
+                    Conductor floors real recommendations at 1.
+                noPolicy:
+                  type: boolean
+                  description: >-
+                    True when Conductor reports no autoscaling policy for the
+                    app; the metrics endpoint 404s and the HPA holds replicas.
+                observedAt:
+                  type: integer
+                  format: int64
+                  description: Epoch ms the underlying queue aggregate was computed.
+                lastPolledAt:
+                  type: string

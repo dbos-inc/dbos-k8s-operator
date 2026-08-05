@@ -9,8 +9,9 @@ spec:
   selector:
     app.kubernetes.io/name: dbos-operator
   ports:
-    # Aggregated External Metrics API. kube-apiserver targets 443; we serve on 6443.
-    - name: metrics-api
-      port: 443
-      targetPort: metrics-api
+    # Plain-HTTP metrics endpoint. KEDA ScaledObjects point their metrics-api
+    # trigger at http://dbos-operator.dbos-operator.svc.cluster.local:8080/apps/<app>/queue-based-autoscaling
+    - name: metrics
+      port: 8080
+      targetPort: metrics
       protocol: TCP

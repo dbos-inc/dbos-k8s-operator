@@ -30,17 +30,11 @@ spec:
           imagePullPolicy: Always
           args:
             - --config=/etc/dbos-operator/config.yaml
-            - --secure-port=6443
-            # Use the cert-manager-issued files directly. Avoids the
-            # auto-generation path that wants to write into --cert-dir
-            # (which here is a read-only Secret mount).
-            - --tls-cert-file=/etc/dbos-operator/certs/tls.crt
-            - --tls-private-key-file=/etc/dbos-operator/certs/tls.key
             - --v=2
           env:
             # Used by the Conductor client to construct the default base URL
             # https://${DBOS_DOMAIN}/conductor/v1alpha1 when no explicit
-            # spec.conductor.endpoint is given in the operator config.
+            # conductor.endpoint is given in the operator config.
             - name: DBOS_DOMAIN
               value: cloud.dbos.dev
             # Bearer JWT for Conductor. Created by the operator user before
@@ -53,21 +47,21 @@ spec:
                   name: conductor-jwt
                   key: token
           ports:
-            - name: metrics-api
-              containerPort: 6443
+            # Plain-HTTP metrics endpoint for KEDA's metrics-api scaler:
+            # GET /apps/<app>/queue-based-autoscaling
+            - name: metrics
+              containerPort: 8080
               protocol: TCP
           livenessProbe:
             httpGet:
-              path: /livez
-              port: metrics-api
-              scheme: HTTPS   # kubelet probes skip cert verification on HTTPS
+              path: /healthz
+              port: metrics
             initialDelaySeconds: 5
             periodSeconds: 20
           readinessProbe:
             httpGet:
-              path: /readyz
-              port: metrics-api
-              scheme: HTTPS
+              path: /healthz
+              port: metrics
             initialDelaySeconds: 3
             periodSeconds: 10
           resources:
@@ -87,16 +81,7 @@ spec:
               mountPath: /etc/dbos-operator/config.yaml
               subPath: config.yaml
               readOnly: true
-            - name: serving-cert
-              mountPath: /etc/dbos-operator/certs
-              readOnly: true
       volumes:
         - name: config
           configMap:
             name: dbos-operator
-        - name: serving-cert
-          secret:
-            # Either populated by cert-manager (config/cert-manager/certificate.yaml)
-            # or by the self-signed fallback (`make certs && make deploy-self-signed-cert`).
-            # Must contain tls.crt and tls.key.
-            secretName: dbos-operator-serving-cert
