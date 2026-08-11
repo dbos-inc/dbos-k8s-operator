@@ -3,7 +3,7 @@
 // Deployment from each CR via server-side apply (field manager "dbos-operator",
 // owner reference for garbage collection) and runs one Conductor poller per CR.
 // Scaling stays external: the operator never writes spec.replicas, so KEDA/HPA
-// own that field, driven by the desired_executors this operator serves.
+// own that field, driven by the desiredExecutors this operator serves.
 //
 // Reconciliation is poll-based (ReconcileInterval), not informer-based: at
 // this scale a LIST every few seconds is cheaper than watch machinery, and a
@@ -211,9 +211,10 @@ func (m *Manager) reconcileDeployment(ctx context.Context, cr *unstructured.Unst
 // setStrategy copies the CR's spec.strategy — same shape and field names as
 // Deployment.spec.strategy — onto the main Deployment, verbatim. Only the
 // main Deployment gets it: versioned drain Deployments must not surge on
-// their own, since an authored maxSurge is also the drain fleet's total pod
-// budget (see drainBudget). A CR without a strategy leaves the field to the
-// Deployment defaults.
+// their own, since their replica counts are exact allocations of the
+// spec.maxOldVersionsReplicas budget (see drainBudget) and a surge would
+// exceed it. A CR without a strategy leaves the field to the Deployment
+// defaults.
 func setStrategy(deployment map[string]any, cr *unstructured.Unstructured) error {
 	strategy, ok, err := unstructured.NestedMap(cr.Object, "spec", "strategy")
 	if err != nil {

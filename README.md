@@ -1,123 +1,43 @@
 # DBOS Kubernetes Operator
 
-A single-binary operator that owns each DBOS app's Deployment through a
-`DBOSApplication` custom resource, polls **DBOS Conductor** for the executor
-count the app's stored **autoscaling policy** implies, and serves that count
-over plain HTTP for **KEDA**'s `metrics-api` scaler.
+The DBOS operator helps you perform fleet management for DBOS applications in Kubernetes.
 
-## What it does
+It performs two main tasks:
+- Expose a metrics endpoint for KEDA to scale workers based on a DBOS queue utilization.
+- Manage deployments for older versions of your workflows on that queue.
 
-For every `DBOSApplication` resource in the cluster, the operator:
+To use the DBOS Operator, you also deploy your application using a DBOS CRD.
 
-1. **Owns the Deployment.** The CR carries the app's pod template
-   (`spec.template`, exactly as in a Deployment); the operator reconciles a
-   Deployment from it via server-side apply and sets an owner reference, so
-   deleting the CR garbage-collects the Deployment. `spec.replicas` is never
-   written — the autoscaler owns that field.
-2. **Asks Conductor for the desired executor count** every tick with a single
-   parameterless call (`GET .../autoscale`). Conductor computes
-   it from the app's stored autoscaling policy — a queue selection (empty =
-   all scalable queues) edited in the DBOS console's Fleet Control page;
-   policy changes take effect within one poll interval, no operator restart.
-   The answer carries one entry per application version. Conductor reports 0
-   when nothing is queued — set `minReplicaCount` on the ScaledObject if you
-   want a floor.
-3. **Keeps a Deployment per old application version.** Workflows only finish on
-   an executor of the version that enqueued them, so every non-latest entry in
-   the response gets its own Deployment — named `<app>-<version-slug>`, pods
-   labelled `dbos.dev/app-version` and pinned to that version via
-   `DBOS__APPVERSION`, sized to that entry's `desired_executors` (at least 1,
-   since work with no queue depth still needs a pod). It is deleted only when
-   the version leaves the response, which is Conductor's signal that nothing of
-   it is left to run — a recommendation of 0 is *not* a teardown signal. These
-   Deployments have no ScaledObject, so the operator writes their
-   `spec.replicas` directly.
+Using the DBOS operator requires a DBOS Conductor license key (self-hosted) or a DBOS Teams subscription.
 
-   Authoring `spec.strategy.rollingUpdate.maxSurge` on the CR (same field,
-   same int-or-percent forms as a Deployment; the whole `spec.strategy` block
-   passes through to the main Deployment verbatim) additionally turns that
-   surge into the old versions' total pod budget: latest replicas + maxSurge
-   is the app's whole allowance, and old versions share whatever surge the
-   latest Deployment's own rollout isn't consuming at that moment — split
-   equally, capped at each version's recommendation, leftovers waterfalling.
-   When there are more versions than budget pods, the newest versions get one
-   pod each and the rest park at 0 replicas until slots free up, so old
-   backlog can never crowd out the latest fleet. Without `maxSurge`, old
-   versions are sized to their recommendation, uncapped.
-4. **Serves the result over HTTP**: `GET /apps/<app>/queue-based-autoscaling`
-   returns the latest version's entry verbatim (snake_case,
-   `desired_executors`), so a KEDA ScaledObject that used to poll Conductor
-   directly only changes its `url`. The latest in-memory reading is served
-   however old it is; only an app with no reading at all answers 503.
-5. **Reports status** on the CR (`kubectl get dbosapp` shows the desired
-   count and last poll time).
+## Autoscaling
 
-## Prerequisites
+At the core of the operator are autoscaling policies, as defined in DBOS Conductor. A DBOS application can be configured with an autoscaling policy, which lets you specificy a DBOS queue to autoscale for. The queue must be unpartitioned and have worker_concurrency set.
 
-- Kubernetes ≥ 1.27
-- A long-lived Conductor JWT
-- KEDA (for actual scaling; any metrics-api consumer works)
-- A container registry the cluster can pull from
+Periodically, the operator polls DBOS Conductor to obtain a desired number of executors, per version, for the policy's queue.
 
-No cert-manager and no API aggregation: the metrics endpoint is plain HTTP
-inside the cluster.
+The operator exposes a metrics endpoint for KEDA (queue-based autoscaling), informing it about the desired number of executor for the _latest version_ of the application. You can compose your existing KEDA scaledOjbects with queue-based autoscaling.
 
-## Install
+## Long lived workflows and versioning
 
-1. **Apply the operator bundle** (namespace, CRD, RBAC, manager):
-   ```bash
-   kubectl apply -k config/default
-   ```
+When you run long-lived workflows and want them to keep executing on an older code base, you must maintain one deployment per workflow version.
+The DBOS operator manages these deployments for you, based on the application's autoscaling policy.
 
-2. **Create the JWT Secret:**
-   ```bash
-   kubectl -n dbos-operator create secret generic conductor-jwt \
-     --from-literal=token="<long-lived JWT>"
-   ```
+## DBOS Operator
 
-3. **Create the runtime ConfigMap.** Copy `config/manager/configmap.yaml`,
-   edit `orgName` / `endpoint` / `kubernetes.namespace`, then:
-   ```bash
-   kubectl apply -f path/to/your/configmap.yaml
-   ```
+### Installation
 
-4. **Declare your apps.** One `DBOSApplication` per app (sample in
-   `config/samples/dbos-starter-python.yaml`):
-   ```yaml
-   apiVersion: dbos.dev/v1alpha1
-   kind: DBOSApplication
-   metadata:
-     name: my-app
-     namespace: my-ns
-   spec:
-     appName: my-app        # Conductor app name; defaults to metadata.name
-     template:              # pod template, as in Deployment.spec.template
-       spec:
-         containers:
-           - name: app
-             image: registry/my-app:tag
-   ```
-   Applying a CR whose name matches an existing Deployment **adopts** it via
-   server-side apply — no pod churn if the template matches.
+Helm chart
 
-5. **Point KEDA at the operator:**
-   ```yaml
-   triggers:
-     - type: metrics-api
-       metadata:
-         url: "http://dbos-operator.dbos-operator.svc.cluster.local:8080/apps/my-app/queue-based-autoscaling"
-         valueLocation: "desired_executors"
-         targetValue: "1"
-   ```
+### Configuration
 
-## Configuring
+- APIkey secret
 
-The runtime config is a YAML file mounted from the `dbos-operator` ConfigMap
-at `/etc/dbos-operator/config.yaml`. It is **not** part of the install bundle:
+The runtime config is a YAML file mounted from the `dbos-operator` ConfigMap at `/etc/dbos-operator/config.yaml`.
 
 ```yaml
 conductor:
-  # Conductor org (passed as the :org_id URL segment).
+  # Conductor organization
   orgName: local
   # When self-hosting Conductor, full base URL of Conductor's HTTP API up
   # through any cloud path prefix. Not necessary with DBOS-managed Conductor.
@@ -125,7 +45,7 @@ conductor:
 
 poller:
   interval: 5s        # autoscale poll cadence per app (default 30s = KEDA's default)
-  maxBackoff: 30s     # failure backoff cap (exponential, ±10% jitter); default max(interval, 30s)
+  maxBackoff: 30s     # failure backoff cap; default max(interval, 30s)
 
 http:
   listen: ":8080"     # KEDA-facing metrics endpoint
@@ -135,70 +55,150 @@ kubernetes:
   reconcileInterval: 10s
 ```
 
-Apply the edited ConfigMap, then `kubectl -n dbos-operator rollout restart
-deployment/dbos-operator` (config is read once at startup). Apps need no
-restart — CRs are re-listed every `reconcileInterval`.
+You can find a template under `config/manager/configmap.yaml`.
+Apply the edited ConfigMap, then `kubectl -n dbos-operator rollout restart deployment/dbos-operator` (config is read once at startup).
+Apps need no restart: Custom Resources are re-listed every `reconcileInterval`.
 
-## Security
+### RBAC
+(`config/rbac/operator.yaml`): read `dbosapplications`, write their `status`, and get/list/create/patch/delete `deployments` (delete only ever targets a versioned Deployment this operator owns).
 
-- **RBAC** (`config/rbac/operator.yaml`): read `dbosapplications`, write
-  their `status`, and get/list/create/patch/delete `deployments` (delete only
-  ever targets a versioned Deployment this operator owns). Nothing else.
-- **Conductor JWT** comes from the `conductor-jwt` Secret via env var.
-- The metrics endpoint performs no authentication (in-cluster, read-only);
-  KEDA's bearer header is accepted and ignored, so an existing
-  `TriggerAuthentication` can stay in place.
 
-## Developing
+## DBOSApplication CRD
 
+Here is an example manifest for a DBOS CRD. This is very much a standard deployment, with a few specific parameters.
+
+```yaml
+  apiVersion: dbos.dev/v1alpha1
+  kind: DBOSApplication
+  metadata:
+    name: dbos-starter-python
+    namespace: dbos
+  spec:
+    appName: dbos-starter-python
+    maxOldVersionsReplicas: 3 # <- total pod budget shared by old-version deployments
+    template:
+      metadata:
+        labels:
+          dbos.dev/starter: "true"
+      spec:
+        containers:
+          - name: app
+            image: # your image
+            imagePullPolicy: Always
+            ports:
+              - containerPort: 3001
+                protocol: TCP
+            env:
+              - name: DBOS_SYSTEM_DATABASE_URL
+                valueFrom:
+                  secretKeyRef:
+                    name: dbos-app-db
+                    key: python-url
+              - name: DBOS_CONDUCTOR_URL
+                valueFrom:
+                  configMapKeyRef:
+                    name: dbos-app-config
+                    key: conductor-url
+              - name: DBOS_CONDUCTOR_KEY # Your application's Conductor API key
+                valueFrom:
+                  secretKeyRef:
+                    name: dbos-app-conductor-key
+                    key: api-key
+              - name: SSL_CERT_FILE
+                value: /certs/ca.crt
+              - name: APP_BASE_PATH
+                value: /python/
+            readinessProbe:
+              httpGet:
+                path: /health
+                port: 3001
+              initialDelaySeconds: 15
+              periodSeconds: 10
+            livenessProbe:
+              httpGet:
+                path: /health
+                port: 3001
+              initialDelaySeconds: 40
+              periodSeconds: 30
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                cpu: 500m
+                memory: 512Mi
+            volumeMounts:
+              - name: tls
+                mountPath: /certs
+                readOnly: true
+        volumes:
+          - name: tls
+            secret:
+              secretName: dbos-app-ca
+              items:
+                - key: ca.crt
+                  path: ca.crt
 ```
-  ┌────────────────────────── Operator pod ──────────────────────────┐
-  │                                                                  │
-  │  ┌─ kube manager ────────────┐    ┌─ poller (one per CR) ─────┐  │
-  │  │ list DBOSApplications     │    │ GET autoscale            │  │
-  │  │ SSA Deployment per CR     ├───►│ write store, patch status│  │
-  │  │ start/stop pollers        │    │                          │  │
-  │  └───────────────────────────┘    └───────────┬──────────────┘  │
-  │                                               ▼                 │
-  │                                        in-memory store          │
-  │                                               ▲                 │
-  │                                   ┌───────────┴─────────┐       │
-  │                                   │ HTTP :8080          │ ──────┼──► KEDA
-  │                                   │ /apps/<app>/...     │       │
-  │                                   └─────────────────────┘       │
-  └──────────────────────────────────────────────────────────────────┘
+
+`maxOldVersionsReplicas`: how many pods, in addition to the latest deployment's own fleet, can run old versions simultaneously — a single total shared by all old versions. Priority is given to later versions. You can also set `spec.strategy` (exactly as in a Deployment) to control the latest deployment's rollout; it plays no role in old-version sizing.
+
+Applying a CR whose name matches an existing Deployment **adopts** it via server-side apply — no pod churn if the template matches.
+
+**Version management**: by default, the operator generates and inject a DBOS application version. Internally it uses that version to map CR manifests, used when deploying older code versions. You can set `DBOS__APPVERSION` yourself, and when using the same version twice, the operator will always replace its mapping with the latest CR manifest.
+
+## Pointing KEDA to the operator
+
+```yaml
+triggers:
+  - type: metrics-api
+    metadata:
+      url: "http://[operator-hostname-in-cluster]:8080/apps/my-app/autoscale"
+      valueLocation: "desiredExecutors"
+      targetValue: "1"
 ```
 
-```
-cmd/operator/main.go            load config → kube manager + HTTP server → wait for SIGTERM
-internal/config/config.go       YAML loader + validation + defaults
-internal/conductor/client.go    bearer-JWT REST client (QueueAutoscale)
-internal/kube/manager.go        CR list loop, SSA Deployment reconcile, poller lifecycle, CR status
-internal/kube/versions.go       per-old-version Deployments: apply while reported, delete once absent
-internal/poller/poller.go       per-app tick: autoscale GET → store; backoff + jitter
-internal/store/store.go         Store interface + in-memory impl (app → latest result)
-internal/metricshttp/server.go  KEDA-facing HTTP endpoint (verbatim body)
+## The operator: under the hood
 
-config/crd/                     DBOSApplication CRD
-config/manager/                 Namespace, ServiceAccount, ConfigMap template, Deployment, Service
-config/rbac/                    ClusterRole + binding
-config/samples/                 example DBOSApplication
-config/default/                 kustomize root
-```
+For every `DBOSApplication` resource in the cluster, the operator:
 
-**Data flow:** the kube manager is the only component talking to
-`kube-apiserver`; pollers are the only writers to `store`; `metricshttp` is
-the only external reader.
+1. **Owns the Deployment.** The Custom Resource carries the app's pod template
+   (`spec.template`, exactly as in a Deployment); `spec.replicas`
+   is never written by the operator itself.
+2. **Asks Conductor for the desired executor count** periodically.
+   Conductor computes it from the app's configured autoscaling policy,
+   which is based on a single queue. The answer carries one entry per application version.
+3. **Keeps a Deployment per old application version.** Workflows only finish on
+   an executor of the version that enqueued them, so every non-latest entry in
+   the response gets its own Deployment, named `<app>-<version-slug>`, pods
+   labelled `dbos.dev/app-version` and pinned to that version via
+   `DBOS__APPVERSION`. It is deleted only when the version leaves the response,
+   which is Conductor's signal that the policy's queue has no pending work.
+   These Deployments' replicas are written by the operator directly (they
+   have no ScaledObject).
 
-**From source:**
+   Authoring `spec.maxOldVersionsReplicas` on the CR caps the old versions'
+   total pod count: all old versions share that budget, split equally and
+   capped at each version's recommendation, with leftovers waterfalling.
+   When old versions demand more replicas than available, the operator
+   prioritizes later versions first (LIFO); versions that get 0 stay parked
+   until slots free up. The budget is additive to the latest deployment's
+   replicas and rollout surge.
+   Without `maxOldVersionsReplicas`, old versions are sized to their
+   recommendation, uncapped.
+4. **Serves the latest's version desired executor count over an HTTP metrics endpoint**:
+   `GET /apps/<app>/autoscale` allows a KEDA ScaledObject to size the latest version's
+   deployment based on queue load.
+
+
+
+
+## Building from sources
 
 ```bash
 IMG=<your-registry>/dbos-operator:dev
 make docker-build docker-push IMG=$IMG
 make deploy IMG=$IMG
 ```
-
-**Local build & checks:**
 
 ```bash
 make build   # binary into bin/operator

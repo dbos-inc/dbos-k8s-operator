@@ -12,7 +12,7 @@ func TestInMemory(t *testing.T) {
 		t.Fatal("empty store returned a result")
 	}
 
-	r := Result{Body: []byte(`{"desired_executors":3}`), DesiredExecutors: 3, PolledAt: time.Now()}
+	r := Result{Body: []byte(`{"desiredExecutors":3}`), DesiredExecutors: 3, PolledAt: time.Now()}
 	s.Set("a", r)
 	got, ok := s.Get("a")
 	if !ok || got.DesiredExecutors != 3 || string(got.Body) != string(r.Body) {

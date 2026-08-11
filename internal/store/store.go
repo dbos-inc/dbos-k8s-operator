@@ -15,7 +15,7 @@ import (
 type Result struct {
 	// Body is the latest version's entry of Conductor's response, verbatim
 	// (snake_case v1 JSON), re-served as-is to KEDA so its valueLocation
-	// (desired_executors) keeps working.
+	// (desiredExecutors) keeps working.
 	Body             []byte
 	DesiredExecutors int
 	ObservedAt       int64     // epoch ms the aggregate was computed (from the response)

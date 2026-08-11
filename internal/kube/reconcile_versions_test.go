@@ -292,10 +292,9 @@ func TestReconcileOldVersionsIgnoresUnusableResults(t *testing.T) {
 	}
 }
 
-// mainDeployment is the app's latest-version Deployment as the fixture's
-// cluster sees it: KEDA-owned spec.replicas plus the observed pod count,
-// which the drain budget reads to know how much surge the latest fleet is
-// already consuming.
+// latestDeployment is the app's latest-version Deployment as the fixture's
+// cluster sees it: KEDA-owned spec.replicas plus the observed pod count. The
+// drain budget must ignore both — the tests below plant it to prove that.
 func latestDeployment(specReplicas, statusReplicas int64) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "apps/v1",
@@ -313,23 +312,23 @@ func latestDeployment(specReplicas, statusReplicas int64) *unstructured.Unstruct
 	}}
 }
 
-func setMaxSurge(t *testing.T, cr *unstructured.Unstructured, maxSurge any) {
+func setMaxOldVersionsReplicas(t *testing.T, cr *unstructured.Unstructured, cap int64) {
 	t.Helper()
-	if err := unstructured.SetNestedField(cr.Object, maxSurge, "spec", "strategy", "rollingUpdate", "maxSurge"); err != nil {
-		t.Fatalf("set maxSurge: %v", err)
+	if err := unstructured.SetNestedField(cr.Object, cap, "spec", "maxOldVersionsReplicas"); err != nil {
+		t.Fatalf("set maxOldVersionsReplicas: %v", err)
 	}
 }
 
-// With a maxSurge authored, old versions share the surge headroom: equal
-// split, capped at each version's need, leftovers waterfalling — here budget
-// 6 over needs 8/2/1 lands 3/2/1.
+// With maxOldVersionsReplicas authored, old versions share that pod budget:
+// equal split, capped at each version's need, leftovers waterfalling — here
+// budget 6 over needs 8/2/1 lands 3/2/1.
 func TestReconcileOldVersionsBudgetSpreadsEqually(t *testing.T) {
 	f := newVersionFixture(t, result(time.Now(),
 		conductor.VersionRecommendation{ApplicationVersion: "v2", DesiredExecutors: 8},
 		conductor.VersionRecommendation{ApplicationVersion: "v1", DesiredExecutors: 2},
 		conductor.VersionRecommendation{ApplicationVersion: "v0", DesiredExecutors: 1},
 	), latestDeployment(4, 4))
-	setMaxSurge(t, f.cr, int64(6))
+	setMaxOldVersionsReplicas(t, f.cr, 6)
 	f.reconcile(t)
 
 	applied := f.applied(t)
@@ -353,7 +352,7 @@ func TestReconcileOldVersionsBudgetParksOldestAtZero(t *testing.T) {
 		conductor.VersionRecommendation{ApplicationVersion: "v1", DesiredExecutors: 5},
 		conductor.VersionRecommendation{ApplicationVersion: "v0", DesiredExecutors: 5},
 	), latestDeployment(1, 1))
-	setMaxSurge(t, f.cr, int64(2))
+	setMaxOldVersionsReplicas(t, f.cr, 2)
 	f.reconcile(t)
 
 	applied := f.applied(t)
@@ -371,47 +370,49 @@ func TestReconcileOldVersionsBudgetParksOldestAtZero(t *testing.T) {
 	}
 }
 
-// A rollout in flight consumes the same surge allowance: the main
-// Deployment's pods over spec (status 6 vs spec 4) shrink the drain budget
-// from 6 to 4, and it comes back as the roll settles.
-func TestReconcileOldVersionsBudgetShrinksDuringRollout(t *testing.T) {
+// The budget is absolute: a rollout in flight on the main Deployment (status
+// 6 vs spec 4) changes nothing — the drain fleet keeps its full allowance.
+func TestReconcileOldVersionsBudgetIgnoresRollout(t *testing.T) {
 	f := newVersionFixture(t, result(time.Now(),
 		conductor.VersionRecommendation{ApplicationVersion: "v2", DesiredExecutors: 8},
 		conductor.VersionRecommendation{ApplicationVersion: "v1", DesiredExecutors: 2},
 		conductor.VersionRecommendation{ApplicationVersion: "v0", DesiredExecutors: 1},
 	), latestDeployment(4, 6))
-	setMaxSurge(t, f.cr, int64(6))
+	setMaxOldVersionsReplicas(t, f.cr, 6)
 	f.reconcile(t)
 
 	applied := f.applied(t)
-	for version, wantReplicas := range map[string]int{"v2": 2, "v1": 1, "v0": 1} {
+	for version, wantReplicas := range map[string]int{"v2": 3, "v1": 2, "v0": 1} {
 		if got := appliedReplicas(t, applied[versionDeploymentName("myapp", version)]); got != wantReplicas {
 			t.Errorf("version %q replicas = %d, want %d", version, got, wantReplicas)
 		}
 	}
 }
 
-// A percentage maxSurge resolves against the latest Deployment's replicas,
-// exactly as it would on the Deployment itself: 50% of 4 buys 2 drain pods.
-func TestReconcileOldVersionsBudgetPercentSurge(t *testing.T) {
+// An explicit 0 is a real budget: every old version parks at zero replicas,
+// but none is deleted — presence in the response still means unfinished work.
+func TestReconcileOldVersionsBudgetZeroParksAll(t *testing.T) {
 	f := newVersionFixture(t, result(time.Now(),
 		conductor.VersionRecommendation{ApplicationVersion: "v1", DesiredExecutors: 9},
 	), latestDeployment(4, 4))
-	setMaxSurge(t, f.cr, "50%")
+	setMaxOldVersionsReplicas(t, f.cr, 0)
 	f.reconcile(t)
 
 	manifest, ok := f.applied(t)[versionDeploymentName("myapp", "v1")]
 	if !ok {
 		t.Fatalf("no apply for v1: %v", f.applied(t))
 	}
-	if got := appliedReplicas(t, manifest); got != 2 {
-		t.Errorf("replicas = %d, want 2 (50%% of 4 latest replicas)", got)
+	if got := appliedReplicas(t, manifest); got != 0 {
+		t.Errorf("replicas = %d, want 0 (parked)", got)
+	}
+	if got := f.deleted(); len(got) != 0 {
+		t.Errorf("deleted %v, want the parked version kept", got)
 	}
 }
 
-// Without an authored maxSurge nothing is budgeted — behavior is unchanged
-// even when the main Deployment is present with live counts.
-func TestReconcileOldVersionsUnbudgetedWithoutMaxSurge(t *testing.T) {
+// Without an authored maxOldVersionsReplicas nothing is budgeted — behavior
+// is unchanged even when the main Deployment is present with live counts.
+func TestReconcileOldVersionsUnbudgetedWithoutCap(t *testing.T) {
 	f := newVersionFixture(t, result(time.Now(),
 		conductor.VersionRecommendation{ApplicationVersion: "v1", DesiredExecutors: 7},
 	), latestDeployment(1, 1))

@@ -1,7 +1,7 @@
 // Package metricshttp serves the operator's poll results over plain HTTP for
 // KEDA's metrics-api scaler. The response is Conductor's queue-based
 // autoscaling JSON verbatim (snake_case), so a ScaledObject that used to
-// point at Conductor keeps its valueLocation (desired_executors) and only
+// point at Conductor keeps its valueLocation (desiredExecutors) and only
 // changes its url. Authorization headers are accepted and ignored — the
 // endpoint is in-cluster and read-only.
 package metricshttp
@@ -17,7 +17,7 @@ import (
 	"github.com/dbos-inc/dbos-k8s-operator/internal/store"
 )
 
-// Server serves GET /apps/{app}/queue-based-autoscaling and GET /healthz.
+// Server serves GET /apps/{app}/autoscale and GET /healthz.
 //
 // The latest in-memory reading is served however old it is: the endpoint has
 // no staleness cutoff. A failing poller therefore holds the last known
@@ -36,7 +36,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("GET /apps/{app}/queue-based-autoscaling", s.serveApp)
+	mux.HandleFunc("GET /apps/{app}/autoscale", s.serveApp)
 	return mux
 }
 

@@ -40,12 +40,13 @@ type VersionRecommendation struct {
 }
 
 // AutoscaleResult is a decoded queue-based-autoscaling response. Body is the
-// latest version's entry, raw JSON exactly as Conductor served it (snake_case
-// v1 form), so it can be re-served verbatim to KEDA's metrics-api scaler,
-// whose valueLocation reads a single object; the parsed fields mirror that
-// entry for logging and CR status updates. OldVersions carries the remaining
-// entries — older versions that still hold work and need executors of their
-// own — in Conductor's order (most recently registered first).
+// latest version's entry, raw JSON exactly as Conductor served it (camelCase
+// v2 form — KEDA's valueLocation must read "desiredExecutors"), so it can be
+// re-served verbatim to KEDA's metrics-api scaler, whose valueLocation reads
+// a single object; the parsed fields mirror that entry for logging and CR
+// status updates. OldVersions carries the remaining entries — older versions
+// that still hold work and need executors of their own — in Conductor's order
+// (most recently registered first).
 type AutoscaleResult struct {
 	Body               []byte
 	ApplicationVersion string
@@ -56,11 +57,12 @@ type AutoscaleResult struct {
 
 // Options configures a Client.
 type Options struct {
-	// Endpoint is the full base URL up to (but not including) /api. Optional;
+	// Endpoint is the full base URL up to (but not including) /v2. Optional;
 	// if empty, defaults to https://${DBOS_DOMAIN:-cloud.dbos.dev}/conductor/v1alpha1.
 	Endpoint string
 
-	// OrgName is required and is passed as the :org_id URL segment.
+	// OrgName is required and is passed as the :orgName URL segment. The v2
+	// API addresses orgs by name (e.g. "local"), not by UUID.
 	OrgName string
 
 	// Token is the bearer JWT, required.
@@ -111,7 +113,7 @@ func New(opts Options) (*Client, error) {
 
 // resolveBaseURL turns the user-supplied Endpoint (which may be empty) into
 // the full base URL we prepend to every request. The result has no trailing
-// slash and contains everything up to but not including /api.
+// slash and contains everything up to but not including /v2.
 func resolveBaseURL(endpoint string) (string, error) {
 	if endpoint != "" {
 		if _, err := url.Parse(endpoint); err != nil {
@@ -140,10 +142,10 @@ func resolveBaseURL(endpoint string) (string, error) {
 // the app's main Deployment; the older entries are returned so the manager can
 // maintain (for now: report) per-version Deployments for them.
 //
-//	GET <base>/api/<orgName>/applications/<app>/autoscale
-//	  → [{"application_version": "...", "is_latest": true, "desired_executors": N, "observed_at": ms}, ...]
+//	GET <base>/v2/orgs/<orgName>/apps/<app>/autoscale
+//	  → [{"applicationVersion": "...", "isLatest": true, "desiredExecutors": N, "observedAt": ms}, ...]
 func (c *Client) QueueAutoscale(ctx context.Context, app string) (*AutoscaleResult, error) {
-	path := fmt.Sprintf("/api/%s/applications/%s/autoscale", url.PathEscape(c.orgName), url.PathEscape(app))
+	path := fmt.Sprintf("/v2/orgs/%s/apps/%s/autoscale", url.PathEscape(c.orgName), url.PathEscape(app))
 	// Decoded twice: once to parse the entries, once to keep the latest
 	// entry's bytes intact for KEDA.
 	var entries []json.RawMessage
@@ -158,10 +160,10 @@ func (c *Client) QueueAutoscale(ctx context.Context, app string) (*AutoscaleResu
 		return nil, fmt.Errorf("QueueAutoscale %s: no recommendation returned", app)
 	}
 	type entry struct {
-		ApplicationVersion string `json:"application_version"`
-		IsLatest           bool   `json:"is_latest"`
-		DesiredExecutors   int    `json:"desired_executors"`
-		ObservedAt         int64  `json:"observed_at"`
+		ApplicationVersion string `json:"applicationVersion"`
+		IsLatest           bool   `json:"isLatest"`
+		DesiredExecutors   int    `json:"desiredExecutors"`
+		ObservedAt         int64  `json:"observedAt"`
 	}
 	result := &AutoscaleResult{}
 	for _, raw := range entries {
@@ -186,7 +188,7 @@ func (c *Client) QueueAutoscale(ctx context.Context, app string) (*AutoscaleResu
 		})
 	}
 	if result.Body == nil {
-		return nil, fmt.Errorf("QueueAutoscale %s: no is_latest entry in %d-entry response", app, len(entries))
+		return nil, fmt.Errorf("QueueAutoscale %s: no isLatest entry in %d-entry response", app, len(entries))
 	}
 	return result, nil
 }

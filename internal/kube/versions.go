@@ -4,22 +4,20 @@
 // entry is present, and is torn down when the entry disappears.
 //
 // Presence, not size, is what decides existence: an entry with
-// desired_executors 0 still means unfinished work whose queue depth is 0 (a
+// desiredExecutors 0 still means unfinished work whose queue depth is 0 (a
 // PENDING workflow already dequeued, say), so its Deployment stays — at one
 // replica normally, possibly at zero under a drain budget. Only Conductor
 // dropping the version from the response — its signal that nothing is left to
 // run — deletes it.
 //
 // Sizing: unbudgeted by default (each version gets its full recommendation,
-// floored at 1). When the CR authors spec.strategy.rollingUpdate.maxSurge —
-// the same field, same int-or-percent forms as a Deployment — that surge
-// becomes the total pod allowance old versions may add on top of the latest
-// fleet, so they can never crowd it out: the budget is the resolved surge
-// minus whatever surge the latest Deployment's own rollout is consuming right
-// now, spread equally across old versions (capped at each one's need,
-// leftovers waterfall), newest versions first when there are more versions
-// than pods. Versions that get 0 stay present but parked, and pick up freed
-// slots as newer versions drain.
+// floored at 1). When the CR authors spec.maxOldVersionsReplicas, that number
+// is the total pod allowance old versions share, spread equally (capped at
+// each one's need, leftovers waterfall), newest versions first when there are
+// more versions than pods. Versions that get 0 stay present but parked, and
+// pick up freed slots as newer versions drain. The budget is independent of
+// the latest Deployment: its replicas and rollout surge are governed by
+// spec.strategy alone.
 //
 // Not yet handled: a deletion grace period and PodDisruptionBudgets, so a
 // version's last pods can be interrupted mid-workflow (the work is durable and
@@ -41,7 +39,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/ptr"
 )
@@ -180,69 +177,33 @@ func pinAppVersion(deployment map[string]any, version string) error {
 	return unstructured.SetNestedSlice(deployment, containers, "spec", "template", "spec", "containers")
 }
 
-// scaledSurge resolves an authored maxSurge — an int or a "25%" string, the
-// same forms a Deployment accepts — against the latest replica count, rounding
-// percentages up exactly like the Deployment controller does.
-func scaledSurge(raw any, latestReplicas int) (int, error) {
-	var value intstr.IntOrString
-	switch v := raw.(type) {
-	case int64:
-		value = intstr.FromInt32(int32(v))
-	case float64:
-		value = intstr.FromInt32(int32(v))
-	case string:
-		value = intstr.FromString(v)
-	default:
-		return 0, fmt.Errorf("spec.strategy.rollingUpdate.maxSurge: unsupported type %T", raw)
-	}
-	surge, err := intstr.GetScaledValueFromIntOrPercent(&value, latestReplicas, true)
-	if err != nil {
-		return 0, fmt.Errorf("spec.strategy.rollingUpdate.maxSurge: %w", err)
-	}
-	if surge < 0 {
-		return 0, fmt.Errorf("spec.strategy.rollingUpdate.maxSurge: negative value %d", surge)
-	}
-	return surge, nil
-}
-
-// drainBudget returns the pod allowance old-version Deployments may use, and
+// drainBudget returns the pod allowance old-version Deployments share, and
 // whether one applies at all: false when the CR authors no
-// spec.strategy.rollingUpdate.maxSurge, in which case sizing is unbudgeted.
-//
-// The budget is the authored surge, resolved against the latest Deployment's
-// live spec.replicas (KEDA owns that field), minus the surge the latest
-// Deployment is consuming right now for its own rollout
-// (status.replicas − spec.replicas while a roll is in flight). Both draw on
-// the same allowance, so a rollout temporarily shrinks the drain fleet
-// instead of stacking on top of it, and the pods come back to the drainers as
-// the roll settles.
-func (m *Manager) drainBudget(ctx context.Context, cr *unstructured.Unstructured) (int, bool, error) {
-	raw, ok, err := unstructured.NestedFieldNoCopy(cr.Object, "spec", "strategy", "rollingUpdate", "maxSurge")
+// spec.maxOldVersionsReplicas, in which case sizing is unbudgeted. The cap is
+// absolute — it does not flex with the latest Deployment's replicas or its
+// rollout surge, so the app's worst-case pod count is
+// latest replicas + rollout surge + maxOldVersionsReplicas.
+func drainBudget(cr *unstructured.Unstructured) (int, bool, error) {
+	raw, ok, err := unstructured.NestedFieldNoCopy(cr.Object, "spec", "maxOldVersionsReplicas")
 	if err != nil {
-		return 0, false, fmt.Errorf("spec.strategy.rollingUpdate.maxSurge: %v", err)
+		return 0, false, fmt.Errorf("spec.maxOldVersionsReplicas: %v", err)
 	}
 	if !ok {
 		return 0, false, nil
 	}
-	latest, overage := 1, 0
-	deployment, err := m.opts.Client.Resource(gvrDeployment).Namespace(cr.GetNamespace()).Get(
-		ctx, cr.GetName(), metav1.GetOptions{})
-	if err != nil && !apierrors.IsNotFound(err) {
-		return 0, false, fmt.Errorf("get main deployment for drain budget: %w", err)
+	var budget int
+	switch v := raw.(type) {
+	case int64:
+		budget = int(v)
+	case float64:
+		budget = int(v)
+	default:
+		return 0, false, fmt.Errorf("spec.maxOldVersionsReplicas: unsupported type %T", raw)
 	}
-	if err == nil {
-		if v, ok, _ := unstructured.NestedInt64(deployment.Object, "spec", "replicas"); ok {
-			latest = int(v)
-		}
-		if v, ok, _ := unstructured.NestedInt64(deployment.Object, "status", "replicas"); ok {
-			overage = max(0, int(v)-latest)
-		}
+	if budget < 0 {
+		return 0, false, fmt.Errorf("spec.maxOldVersionsReplicas: negative value %d", budget)
 	}
-	surge, err := scaledSurge(raw, latest)
-	if err != nil {
-		return 0, false, err
-	}
-	return max(0, surge-overage), true, nil
+	return budget, true, nil
 }
 
 // allocateDrainBudget spreads budget pods across versions in order, one pod
@@ -282,9 +243,9 @@ func (m *Manager) oldVersionStaleAfter() time.Duration {
 
 // reconcileOldVersions makes the cluster match the latest poll result's
 // non-latest entries: one Deployment per entry, sized to its recommendation
-// (at least 1) — clipped by the drain budget when the CR authors a maxSurge —
-// and deletion of every versioned Deployment of this app whose version has
-// left the response.
+// (at least 1) — clipped by the drain budget when the CR authors
+// spec.maxOldVersionsReplicas — and deletion of every versioned Deployment of
+// this app whose version has left the response.
 //
 // Deletion is driven by the *live* list of versioned Deployments rather than a
 // diff against the previous result, so a version that outlived an operator
@@ -309,7 +270,7 @@ func (m *Manager) reconcileOldVersions(ctx context.Context, cr *unstructured.Uns
 		return nil
 	}
 
-	budget, budgeted, err := m.drainBudget(ctx, cr)
+	budget, budgeted, err := drainBudget(cr)
 	if err != nil {
 		return err
 	}

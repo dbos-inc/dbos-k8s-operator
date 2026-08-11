@@ -10,7 +10,7 @@ spec:
     app.kubernetes.io/name: dbos-operator
   ports:
     # Plain-HTTP metrics endpoint. KEDA ScaledObjects point their metrics-api
-    # trigger at http://dbos-operator.dbos-operator.svc.cluster.local:8080/apps/<app>/queue-based-autoscaling
+    # trigger at http://dbos-operator.dbos-operator.svc.cluster.local:8080/apps/<app>/autoscale
     - name: metrics
       port: 8080
       targetPort: metrics

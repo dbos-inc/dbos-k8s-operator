@@ -48,7 +48,7 @@ spec:
                   key: token
           ports:
             # Plain-HTTP metrics endpoint for KEDA's metrics-api scaler:
-            # GET /apps/<app>/queue-based-autoscaling
+            # GET /apps/<app>/autoscale
             - name: metrics
               containerPort: 8080
               protocol: TCP

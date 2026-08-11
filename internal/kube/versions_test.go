@@ -113,8 +113,8 @@ func TestBuildVersionDeployment(t *testing.T) {
 	}
 }
 
-// An authored CR strategy must never leak into a versioned Deployment: its
-// maxSurge is the drain fleet's budget, not a license for drainers to surge.
+// An authored CR strategy must never leak into a versioned Deployment: drain
+// replica counts are exact budget allocations, not a license to surge.
 func TestBuildVersionDeploymentCarriesNoStrategy(t *testing.T) {
 	cr := testCR()
 	_ = unstructured.SetNestedField(cr.Object, "2", "spec", "strategy", "rollingUpdate", "maxSurge")
@@ -147,38 +147,5 @@ func TestAllocateDrainBudget(t *testing.T) {
 				t.Errorf("allocateDrainBudget(%v, %d) = %v, want %v", tc.needs, tc.budget, got, tc.want)
 			}
 		})
-	}
-}
-
-func TestScaledSurge(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		raw    any
-		latest int
-		want   int
-	}{
-		// The two forms a Deployment accepts, resolved the same way: ints
-		// as-is, percentages of the latest replica count rounded up.
-		{"int", int64(3), 10, 3},
-		{"json number", float64(2), 10, 2},
-		{"percent rounds up", "25%", 1, 1},
-		{"percent of fleet", "50%", 4, 2},
-		{"percent over 100", "150%", 2, 3},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := scaledSurge(tc.raw, tc.latest)
-			if err != nil {
-				t.Fatalf("scaledSurge(%v, %d): %v", tc.raw, tc.latest, err)
-			}
-			if got != tc.want {
-				t.Errorf("scaledSurge(%v, %d) = %d, want %d", tc.raw, tc.latest, got, tc.want)
-			}
-		})
-	}
-
-	for _, raw := range []any{"abc", true} {
-		if _, err := scaledSurge(raw, 4); err == nil {
-			t.Errorf("scaledSurge(%v) succeeded, want an error", raw)
-		}
 	}
 }

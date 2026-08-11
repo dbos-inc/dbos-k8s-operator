@@ -29,28 +29,28 @@ type fakeConductor struct {
 
 func (f *fakeConductor) handler(t *testing.T, org, app string) http.Handler {
 	mux := http.NewServeMux()
-	base := fmt.Sprintf("/api/%s/applications/%s", org, app)
+	base := fmt.Sprintf("/v2/orgs/%s/apps/%s", org, app)
 	mux.HandleFunc("GET "+base+"/autoscale", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		if r.URL.RawQuery != "" {
 			t.Errorf("autoscale GET carried query parameters: %s", r.URL.RawQuery)
 		}
-		// One entry per application version, latest first.
+		// One entry per application version, latest first (v2 camelCase form).
 		_ = json.NewEncoder(w).Encode([]map[string]any{
 			{
-				"application_version": "v2",
-				"is_latest":           true,
-				"desired_executors":   f.desired,
-				"observed_at":         time.Now().UnixMilli(),
+				"applicationVersion": "v2",
+				"isLatest":           true,
+				"desiredExecutors":   f.desired,
+				"observedAt":         time.Now().UnixMilli(),
 			},
 			{
-				"application_version": "v1",
-				"is_latest":           false,
+				"applicationVersion": "v1",
+				"isLatest":           false,
 				// An older version's demand must not leak into the latest
 				// entry (which KEDA reads); it surfaces only in OldVersions.
-				"desired_executors": f.desired + 100,
-				"observed_at":       time.Now().UnixMilli(),
+				"desiredExecutors": f.desired + 100,
+				"observedAt":       time.Now().UnixMilli(),
 			},
 		})
 	})
@@ -102,10 +102,11 @@ func TestPollPipeline(t *testing.T) {
 	fake.mu.Unlock()
 	waitFor(t, func() bool { r, ok := s.Get("myapp"); return ok && r.DesiredExecutors == 9 })
 
-	// The HTTP endpoint serves the conductor body verbatim (snake_case).
+	// The HTTP endpoint serves the conductor body verbatim (v2 camelCase —
+	// KEDA's valueLocation reads desiredExecutors).
 	h := metricshttp.NewServer(s).Handler()
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/apps/myapp/queue-based-autoscaling", nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/apps/myapp/autoscale", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("metrics endpoint = %d: %s", rec.Code, rec.Body.String())
 	}
@@ -113,14 +114,14 @@ func TestPollPipeline(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("metrics endpoint body: %v", err)
 	}
-	if body["desired_executors"].(float64) != 9 {
-		t.Errorf("served desired_executors = %v", body["desired_executors"])
+	if body["desiredExecutors"].(float64) != 9 {
+		t.Errorf("served desiredExecutors = %v", body["desiredExecutors"])
 	}
 
 	// An app with no reading at all 503s, so KEDA never scales on garbage. An
 	// old reading is not garbage: it is served as-is.
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/apps/ghost/queue-based-autoscaling", nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/apps/ghost/autoscale", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("unknown app = %d, want 503", rec.Code)
 	}

@@ -38,20 +38,26 @@ spec:
                   type: string
                   description: >-
                     Conductor application name. Defaults to metadata.name.
+                maxOldVersionsReplicas:
+                  description: >-
+                    Total pod budget shared by all old-version drain
+                    Deployments, additive to the main Deployment's replicas
+                    and rollout surge. Spread equally across old versions,
+                    capped at each version's recommendation, leftovers
+                    waterfalling; newest versions first when there are more
+                    versions than pods, the rest parked at 0 until slots
+                    free. Unset means old versions are sized to their own
+                    recommendation, uncapped; 0 parks them all.
+                  type: integer
+                  minimum: 0
                 strategy:
                   description: >-
                     Update strategy for the app's main Deployment, exactly as
                     in Deployment.spec.strategy (type,
                     rollingUpdate.maxSurge, rollingUpdate.maxUnavailable) —
-                    passed through verbatim. Setting rollingUpdate.maxSurge
-                    additionally budgets the old-version drain Deployments:
-                    latest replicas + maxSurge is the app's total pod
-                    allowance, and old versions share whatever surge headroom
-                    the latest Deployment isn't using (equal split capped at
-                    each version's recommendation; newest versions first when
-                    there are more versions than pods, the rest parked at 0
-                    until slots free). Without maxSurge, old versions are
-                    sized to their own recommendation, uncapped.
+                    passed through verbatim. Applies only to the main
+                    Deployment; old-version drain Deployments are budgeted by
+                    maxOldVersionsReplicas instead.
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
                 template:
