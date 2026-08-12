@@ -3,71 +3,36 @@ package kube
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
-	"k8s.io/utils/ptr"
 )
 
 const versionLabel = "dbos.dev/app-version"
 
-func sanitizeVersion(version string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(version) {
-		switch {
-		case r >= 'a' && r <= 'z' || r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteRune('-')
-		}
-	}
-	return strings.Trim(b.String(), "-")
-}
-
-// Two distinct versions must never share a slug — they would share a Deployment.
-func versionSlug(version string) string {
-	if version == "" {
-		return "unversioned"
-	}
-	s := sanitizeVersion(version)
-	if s == strings.ToLower(version) && len(s) <= 40 {
-		return s
-	}
-	sum := sha256.Sum256([]byte(version))
-	hash := hex.EncodeToString(sum[:])[:6]
-	if len(s) > 33 {
-		s = strings.Trim(s[:33], "-")
-	}
-	if s == "" {
-		return "v-" + hash
-	}
-	return s + "-" + hash
-}
-
+// Versions here are always operator-seeded (the snapshot gate refuses
+// anything else), so they are name- and label-safe verbatim.
 // The latest version keeps the bare CR name (KEDA targets it by name).
 func versionDeploymentName(app, version string) string {
-	return app + "-" + versionSlug(version)
+	return app + "-" + version
 }
 
-// spec.replicas is written directly — old versions have no ScaledObject.
+// Build a Deployment for a specific version, with the given template and replica count.
 func buildVersionDeployment(cr *unstructured.Unstructured, version string, replicas int, template map[string]any) (map[string]any, error) {
 	deployment, err := assembleDeployment(cr, template)
 	if err != nil {
 		return nil, err
 	}
-	suffix := versionSlug(version)
 	if err := unstructured.SetNestedField(deployment, versionDeploymentName(cr.GetName(), version), "metadata", "name"); err != nil {
 		return nil, err
 	}
+	// Init fields not copied from the CR specs.
 	for _, path := range [][]string{
 		{"metadata", "labels"},
 		{"spec", "selector", "matchLabels"},
@@ -77,7 +42,7 @@ func buildVersionDeployment(cr *unstructured.Unstructured, version string, repli
 		if labels == nil {
 			labels = map[string]any{}
 		}
-		labels[versionLabel] = suffix
+		labels[versionLabel] = version
 		if err := unstructured.SetNestedMap(deployment, labels, path...); err != nil {
 			return nil, err
 		}
@@ -91,6 +56,7 @@ func buildVersionDeployment(cr *unstructured.Unstructured, version string, repli
 	return deployment, nil
 }
 
+// Write our version in the manifest -- ignore any existing value.
 func pinAppVersion(deployment map[string]any, version string) error {
 	containers, ok, err := unstructured.NestedSlice(deployment, "spec", "template", "spec", "containers")
 	if err != nil || !ok {
@@ -118,15 +84,15 @@ func pinAppVersion(deployment map[string]any, version string) error {
 	return unstructured.SetNestedSlice(deployment, containers, "spec", "template", "spec", "containers")
 }
 
-// No poll yet, no policy, or a stale result leaves the fleet untouched —
-// absence of data must never be read as "delete everything".
 func (m *Manager) reconcileOldVersions(ctx context.Context, cr *unstructured.Unstructured, logger klog.Logger) error {
 	key := cr.GetNamespace() + "/" + cr.GetName()
 
+	// How many old versions do we have sizing recommendations for?
 	result, ok := m.opts.Store.Get(appName(cr))
 	if !ok || result.NoPolicy {
 		return nil
 	}
+	// Results can be marked "stale" when Conductor is unresponsive.
 	if result.Stale {
 		logger.V(2).Info("skipping old-version reconcile on a stale poll result", "app", key)
 		return nil
@@ -135,8 +101,8 @@ func (m *Manager) reconcileOldVersions(ctx context.Context, cr *unstructured.Uns
 	keep := make(map[string]bool, len(result.OldVersions))
 	var errs []error
 	for _, v := range result.OldVersions {
-		keep[versionSlug(v.ApplicationVersion)] = true
-		replicas := max(v.DesiredExecutors, 0)
+		keep[v.ApplicationVersion] = true
+		replicas := max(v.DesiredExecutors, 0) // v.DesiredExecutors should be >= 0, but be defensive
 		if err := m.applyVersionDeployment(ctx, cr, v.ApplicationVersion, replicas); err != nil {
 			errs = append(errs, err)
 			continue
@@ -172,13 +138,14 @@ func (m *Manager) applyVersionDeployment(ctx context.Context, cr *unstructured.U
 	}
 	_, err = m.opts.Client.Resource(gvrDeployment).Namespace(cr.GetNamespace()).Patch(
 		ctx, versionDeploymentName(cr.GetName(), version), types.ApplyPatchType, payload,
-		metav1.PatchOptions{FieldManager: fieldManager, Force: ptr.To(true)})
+		metav1.PatchOptions{FieldManager: fieldManager, Force: new(true)})
 	if err != nil {
 		return fmt.Errorf("apply deployment for version %q: %w", version, err)
 	}
 	return nil
 }
 
+// List all the current versioned deployments for this app, and delete any that are not in the keep set.
 func (m *Manager) deleteDepartedVersions(ctx context.Context, cr *unstructured.Unstructured, keep map[string]bool, logger klog.Logger) error {
 	selector := fmt.Sprintf("app=%s,app.kubernetes.io/managed-by=%s,%s",
 		cr.GetName(), fieldManager, versionLabel)
@@ -190,8 +157,8 @@ func (m *Manager) deleteDepartedVersions(ctx context.Context, cr *unstructured.U
 	var errs []error
 	for i := range list.Items {
 		deployment := &list.Items[i]
-		slug := deployment.GetLabels()[versionLabel]
-		if slug == "" || keep[slug] {
+		version := deployment.GetLabels()[versionLabel]
+		if version == "" || keep[version] {
 			continue
 		}
 		if !ownedBy(deployment, cr) {
@@ -207,7 +174,7 @@ func (m *Manager) deleteDepartedVersions(ctx context.Context, cr *unstructured.U
 		}
 		logger.Info("version left the autoscale response; deployment deleted",
 			"app", cr.GetNamespace()+"/"+cr.GetName(),
-			"version", slug, "deployment", deployment.GetName())
+			"version", version, "deployment", deployment.GetName())
 	}
 	return errors.Join(errs...)
 }

@@ -98,15 +98,12 @@ func TestSeededVersionRoundTrip(t *testing.T) {
 	if version != "1754300000000123456-9f2c41ab8de30a17" {
 		t.Errorf("mintSeededVersion = %q", version)
 	}
-	hash, ok := parseSeededVersion(version)
+	hash, ok := extractDeploymentHashFromAppVersion(version)
 	if !ok || hash != "9f2c41ab8de30a17" {
 		t.Errorf("parseSeededVersion(%q) = %q, %v", version, hash, ok)
 	}
-	if got := versionSlug(version); got != version {
-		t.Errorf("versionSlug(%q) = %q, want identity", version, got)
-	}
 	for _, in := range []string{"v1.2.3", "authored", "123-DEADBEEFDEADBEEF", "123-9f2c41ab8de3", ""} {
-		if _, ok := parseSeededVersion(in); ok {
+		if _, ok := extractDeploymentHashFromAppVersion(in); ok {
 			t.Errorf("parseSeededVersion(%q) accepted a non-seeded version", in)
 		}
 	}
@@ -165,7 +162,7 @@ func TestReconcileDeploymentMintsOnTemplateChange(t *testing.T) {
 	if version == stale {
 		t.Fatal("stale version reused despite template change")
 	}
-	if hash, ok := parseSeededVersion(version); !ok || hash != crHash(t, f.cr) {
+	if hash, ok := extractDeploymentHashFromAppVersion(version); !ok || hash != crHash(t, f.cr) {
 		t.Errorf("minted version = %q, want hash %s", version, crHash(t, f.cr))
 	}
 }

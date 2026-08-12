@@ -49,7 +49,7 @@ func mintSeededVersion(hash string, now time.Time) string {
 	return strconv.FormatInt(now.UnixNano(), 10) + "-" + hash
 }
 
-func parseSeededVersion(version string) (hash string, ok bool) {
+func extractDeploymentHashFromAppVersion(version string) (hash string, ok bool) {
 	if !seededVersionRe.MatchString(version) {
 		return "", false
 	}
@@ -90,7 +90,7 @@ func (m *Manager) resolveAppVersion(ctx context.Context, cr *unstructured.Unstru
 	if err != nil {
 		return "", "", err
 	}
-	if h, ok := parseSeededVersion(live); ok && h == hash {
+	if h, ok := extractDeploymentHashFromAppVersion(live); ok && h == hash {
 		return live, hash, nil
 	}
 	version = mintSeededVersion(hash, time.Now())
@@ -167,7 +167,7 @@ func (m *Manager) ensureSnapshot(ctx context.Context, cr *unstructured.Unstructu
 }
 
 func (m *Manager) snapshotTemplate(ctx context.Context, cr *unstructured.Unstructured, version string) (map[string]any, bool, error) {
-	hash, ok := parseSeededVersion(version)
+	hash, ok := extractDeploymentHashFromAppVersion(version)
 	if !ok {
 		return nil, false, nil
 	}
@@ -180,7 +180,7 @@ func (m *Manager) snapshotTemplate(ctx context.Context, cr *unstructured.Unstruc
 	if err != nil {
 		return nil, false, fmt.Errorf("get template snapshot %q: %w", name, err)
 	}
-	if !ownedBy(obj, cr) {
+	if !ownedBy(obj, cr) { // Prevent unlikely but possible collisions with other apps that happen to have the same hash.
 		return nil, false, nil
 	}
 	template, ok, err := unstructured.NestedMap(obj.Object, "data", "template")

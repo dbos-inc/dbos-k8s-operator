@@ -109,7 +109,7 @@ func (f *versionFixture) deleted() []string {
 	return names
 }
 
-func versionDeployment(name, slug string, owned bool) *unstructured.Unstructured {
+func versionDeployment(name, version string, owned bool) *unstructured.Unstructured {
 	d := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "apps/v1",
 		"kind":       "Deployment",
@@ -119,7 +119,7 @@ func versionDeployment(name, slug string, owned bool) *unstructured.Unstructured
 			"labels": map[string]any{
 				"app":                          "myapp",
 				"app.kubernetes.io/managed-by": fieldManager,
-				versionLabel:                   slug,
+				versionLabel:                   version,
 			},
 		},
 		"spec": map[string]any{"replicas": int64(1)},
@@ -145,7 +145,7 @@ func seededVersion(n int) string {
 func ownedSnapshots(versions ...string) []*unstructured.Unstructured {
 	var out []*unstructured.Unstructured
 	for _, v := range versions {
-		hash, _ := parseSeededVersion(v)
+		hash, _ := extractDeploymentHashFromAppVersion(v)
 		template, _, _ := unstructured.NestedMap(testCR().Object, "spec", "template")
 		out = append(out, snapshotFor(snapshotName("myapp", hash), "", template))
 	}
@@ -196,7 +196,7 @@ func TestReconcileOldVersionsParksZeroDesiredWithoutDeleting(t *testing.T) {
 	v1 := seededVersion(1)
 	f := newVersionFixture(t, result(time.Now(),
 		conductor.VersionRecommendation{ApplicationVersion: v1, DesiredExecutors: 0},
-	), append(ownedSnapshots(v1), versionDeployment(versionDeploymentName("myapp", v1), versionSlug(v1), true))...)
+	), append(ownedSnapshots(v1), versionDeployment(versionDeploymentName("myapp", v1), v1, true))...)
 	f.reconcile(t)
 
 	manifest, ok := f.applied(t)[versionDeploymentName("myapp", v1)]
@@ -218,8 +218,8 @@ func TestReconcileOldVersionsDeletesDepartedVersions(t *testing.T) {
 	f := newVersionFixture(t, result(time.Now(),
 		conductor.VersionRecommendation{ApplicationVersion: v1, DesiredExecutors: 2},
 	), append(ownedSnapshots(v1),
-		versionDeployment(staying, versionSlug(v1), true),
-		versionDeployment(departed, versionSlug(v0), true),
+		versionDeployment(staying, v1, true),
+		versionDeployment(departed, v0, true),
 	)...)
 	f.reconcile(t)
 
@@ -251,7 +251,7 @@ func TestReconcileOldVersionsLeavesMainDeployment(t *testing.T) {
 }
 
 func TestReconcileOldVersionsSkipsForeignDeployment(t *testing.T) {
-	foreign := versionDeployment(versionDeploymentName("myapp", "v0"), versionSlug("v0"), false)
+	foreign := versionDeployment(versionDeploymentName("myapp", "v0"), "v0", false)
 	f := newVersionFixture(t, result(time.Now()), foreign)
 	f.reconcile(t)
 
@@ -261,7 +261,7 @@ func TestReconcileOldVersionsSkipsForeignDeployment(t *testing.T) {
 }
 
 func TestReconcileOldVersionsIgnoresUnusableResults(t *testing.T) {
-	departed := versionDeployment(versionDeploymentName("myapp", "v0"), versionSlug("v0"), true)
+	departed := versionDeployment(versionDeploymentName("myapp", "v0"), "v0", true)
 
 	cases := map[string]func(*versionFixture){
 		"no poll result yet": func(f *versionFixture) {

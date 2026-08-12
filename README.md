@@ -200,7 +200,7 @@ For every `DBOSApplication` resource in the cluster, the operator:
    which is based on a single queue. The answer carries one entry per application version.
 3. **Keeps a Deployment per old application version.** Workflows only finish on
    an executor of the version that enqueued them, so every non-latest entry in
-   the response gets its own Deployment, named `<app>-<version-slug>`, pods
+   the response gets its own Deployment, named `<app>-<version>`, pods
    labelled `dbos.dev/app-version` and pinned to that version via
    `DBOS__APPVERSION`. It is deleted only when the version leaves the response,
    which is Conductor's signal that the policy's queue has no pending work.

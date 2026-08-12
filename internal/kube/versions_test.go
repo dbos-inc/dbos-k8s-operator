@@ -1,41 +1,10 @@
 package kube
 
 import (
-	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
-
-func TestVersionSlug(t *testing.T) {
-	for _, tc := range []struct{ in, want string }{
-		{"rollout-1754321098", "rollout-1754321098"},
-		{"9a3f0c", "9a3f0c"},
-		{"", "unversioned"},
-	} {
-		if got := versionSlug(tc.in); got != tc.want {
-			t.Errorf("versionSlug(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-
-	for _, in := range []string{"V1.2.3+Build", "___", strings.Repeat("ab", 32)} {
-		got := versionSlug(in)
-		if len(got) > 40 {
-			t.Errorf("versionSlug(%q) = %q, longer than 40 chars", in, got)
-		}
-		if got == sanitizeVersion(in) {
-			t.Errorf("versionSlug(%q) = %q, want a disambiguating hash", in, got)
-		}
-	}
-
-	if a, b := versionSlug("v1.0"), versionSlug("v1+0"); a == b {
-		t.Errorf("versionSlug collision: %q and %q both slug to %q", "v1.0", "v1+0", a)
-	}
-	long := strings.Repeat("ab", 32)
-	if a, b := versionSlug(long+"one"), versionSlug(long+"two"); a == b {
-		t.Errorf("versionSlug collision on truncated versions: both %q", a)
-	}
-}
 
 func TestBuildVersionDeployment(t *testing.T) {
 	cr := testCR()
