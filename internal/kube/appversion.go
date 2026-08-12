@@ -1,6 +1,6 @@
-// Unless the author pins DBOS__APPVERSION, each rollout is seeded as
-// <ns-epoch>-<template-hash>: the timestamp makes every rollout (rollbacks
-// included) register as latest; templates persist as ControllerRevisions.
+// Each rollout is seeded as <ns-epoch>-<template-hash>: the timestamp makes
+// every rollout (rollbacks included) register as latest; templates persist as
+// ControllerRevisions.
 package kube
 
 import (
@@ -26,7 +26,7 @@ var gvrControllerRevision = schema.GroupVersionResource{Group: "apps", Version: 
 const appVersionEnv = "DBOS__APPVERSION"
 
 // Part of the parse contract — changing it re-versions every template.
-const templateHashLen = 12
+const templateHashLen = 16
 
 const (
 	snapshotHashAnnotation    = "dbos.dev/template-hash"
@@ -56,7 +56,6 @@ func parseSeededVersion(version string) (hash string, ok bool) {
 	return version[strings.LastIndex(version, "-")+1:], true
 }
 
-// A valueFrom or empty entry counts as authored but yields "".
 func authoredAppVersion(template map[string]any) (string, bool) {
 	containers, _, _ := unstructured.NestedSlice(template, "spec", "containers")
 	for _, item := range containers {
@@ -75,32 +74,28 @@ func authoredAppVersion(template map[string]any) (string, bool) {
 	return "", false
 }
 
-// Authored wins; otherwise the live seeded version is reused while its hash
-// matches — a reconcile pass or restart must never mint a phantom rollout.
-func (m *Manager) resolveAppVersion(ctx context.Context, cr *unstructured.Unstructured, template map[string]any, logger klog.Logger) (version string, seeded bool, err error) {
-	// Use the versioned pinned by the CR definition, if any.
-	if authored, ok := authoredAppVersion(template); ok {
-		if authored == "" {
-			return "", false, fmt.Errorf("%s must be pinned to a literal value; valueFrom (or an empty value) is unsupported: the operator cannot snapshot a version it cannot read", appVersionEnv)
-		}
-		return authored, false, nil
+// The live seeded version is reused while its hash matches — a reconcile
+// pass or restart must never mint a phantom rollout.
+func (m *Manager) resolveAppVersion(ctx context.Context, cr *unstructured.Unstructured, template map[string]any, logger klog.Logger) (version, hash string, err error) {
+	if _, ok := authoredAppVersion(template); ok {
+		return "", "", fmt.Errorf("%s is operator-owned; remove it from spec.template", appVersionEnv)
 	}
-	// Otherwise, reuse the live seeded version if its hash matches the current template.
-	hash, err := hashTemplate(template)
+	hash, err = hashTemplate(template)
 	if err != nil {
-		return "", false, err
+		return "", "", err
 	}
 	live, err := m.liveAppVersion(ctx, cr)
 	if err != nil {
-		return "", false, err
+		return "", "", err
 	}
+	// Reuse the live seeded version if its hash matches the current template.
 	if h, ok := parseSeededVersion(live); ok && h == hash {
-		return live, true, nil
+		return live, hash, nil
 	}
 	version = mintSeededVersion(hash, time.Now())
 	logger.Info("template changed; new application version",
 		"app", cr.GetNamespace()+"/"+cr.GetName(), "version", version, "previous", live)
-	return version, true, nil
+	return version, hash, nil
 }
 
 // Read the currently deployed CR and extract its DBOS__APPVERSION
@@ -118,21 +113,14 @@ func (m *Manager) liveAppVersion(ctx context.Context, cr *unstructured.Unstructu
 	return version, nil
 }
 
-func snapshotKey(version string) string {
-	if hash, ok := parseSeededVersion(version); ok {
-		return hash
-	}
-	return versionSlug(version)
+// Keyed by template hash, not version, so rollbacks reuse existing entries.
+func snapshotName(app, hash string) string {
+	return app + "-tpl-" + hash
 }
 
-func snapshotName(app, version string) string {
-	return app + "-tpl-" + snapshotKey(version) // remove the timestamp from the seeded version, so we can reuse existing entries during rollback
-}
-
-// A seeded hash naming a different template is a loud error; an author-pinned
-// version reused across template changes is replaced (latest wins).
+// A hash naming a different template is a loud error, never overwritten.
 func (m *Manager) ensureSnapshot(ctx context.Context, cr *unstructured.Unstructured, version, hash string, template map[string]any, logger klog.Logger) error {
-	name := snapshotName(cr.GetName(), version)
+	name := snapshotName(cr.GetName(), hash)
 	revisions := m.opts.Client.Resource(gvrControllerRevision).Namespace(cr.GetNamespace())
 	snapshot := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "apps/v1",
@@ -155,45 +143,33 @@ func (m *Manager) ensureSnapshot(ctx context.Context, cr *unstructured.Unstructu
 	}}
 
 	_, err := revisions.Create(ctx, snapshot, metav1.CreateOptions{})
-	if err == nil || !apierrors.IsAlreadyExists(err) {
-		if err != nil {
-			return fmt.Errorf("create template snapshot %q: %w", name, err)
-		}
+	if err == nil {
 		logger.Info("template snapshot captured", "app", cr.GetNamespace()+"/"+cr.GetName(),
 			"snapshot", name, "version", version)
 		return nil
 	}
+	if !apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf("create template snapshot %q: %w", name, err)
+	}
 
-	// The snapshot already exists.
 	existing, err := revisions.Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("get template snapshot %q: %w", name, err)
 	}
 	// Same hash means the template is unchanged; nothing to do. That's the common path.
-	if existing.GetAnnotations()[snapshotHashAnnotation] == hash {
-		return nil
-	}
-	// This should never happen except if someone screwed with the snapshot directly.
-	if _, seeded := parseSeededVersion(version); seeded {
+	if existing.GetAnnotations()[snapshotHashAnnotation] != hash {
+		// This should never happen except if someone screwed with the snapshot directly.
 		return fmt.Errorf("template snapshot %q holds a different template for hash %s; refusing to overwrite", name, hash)
 	}
-	// Reaching this means the user pinned a version and redeployed -- we replace the snapshot with the new template. Latest wins.
-	if !ownedBy(existing, cr) { // Just make sure our CR actually owns the snapshot before we delete it :-)
-		return fmt.Errorf("template snapshot %q exists but is not owned by this DBOSApplication", name)
-	}
-	if err := revisions.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("replace template snapshot %q: %w", name, err)
-	}
-	if _, err := revisions.Create(ctx, snapshot, metav1.CreateOptions{}); err != nil {
-		return fmt.Errorf("replace template snapshot %q: %w", name, err)
-	}
-	logger.Info("pinned version reused across template changes; snapshot replaced",
-		"app", cr.GetNamespace()+"/"+cr.GetName(), "snapshot", name, "version", version)
 	return nil
 }
 
 func (m *Manager) snapshotTemplate(ctx context.Context, cr *unstructured.Unstructured, version string) (map[string]any, bool, error) {
-	name := snapshotName(cr.GetName(), version)
+	hash, ok := parseSeededVersion(version)
+	if !ok {
+		return nil, false, nil
+	}
+	name := snapshotName(cr.GetName(), hash)
 	obj, err := m.opts.Client.Resource(gvrControllerRevision).Namespace(cr.GetNamespace()).Get(
 		ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {

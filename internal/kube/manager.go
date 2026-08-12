@@ -98,7 +98,7 @@ func (m *Manager) reconcileAll(ctx context.Context, logger klog.Logger) error {
 		return fmt.Errorf("list DBOSApplications: %w", err)
 	}
 
-	// For each live CR, reconcile its Deployment and ensure a poller is running. Then stop any pollers for removed CRs.
+	// For each live CR, reconcile its Deployment(s) and ensure a poller is running. Then stop any pollers for removed CRs.
 	live := map[string]bool{}
 	for i := range list.Items {
 		cr := &list.Items[i]
@@ -141,9 +141,8 @@ func (m *Manager) reconcileDeployment(ctx context.Context, cr *unstructured.Unst
 	if err != nil || !ok {
 		return fmt.Errorf("spec.template missing or malformed: %v", err)
 	}
-	// Resolve with DBOS__APPVERSION this CR uses.
-	// User-provided authored values win, otherwise a seeded version is minted and pinned.
-	version, seeded, err := m.resolveAppVersion(ctx, cr, template, logger)
+	// Resolve the DBOS__APPVERSION this CR uses: seeded from the template hash.
+	version, hash, err := m.resolveAppVersion(ctx, cr, template, logger)
 	if err != nil {
 		return err
 	}
@@ -155,14 +154,8 @@ func (m *Manager) reconcileDeployment(ctx context.Context, cr *unstructured.Unst
 	if err := copySpecFields(deployment, cr); err != nil {
 		return err
 	}
-	// If we generated a version, inject it in the deployment manifest.
-	if seeded {
-		if err := pinAppVersion(deployment, version); err != nil {
-			return err
-		}
-	}
-	hash, err := hashTemplate(template)
-	if err != nil {
+	// Inject the version in the deployment manifest.
+	if err := pinAppVersion(deployment, version); err != nil {
 		return err
 	}
 	if err := m.ensureSnapshot(ctx, cr, version, hash, template, logger); err != nil {

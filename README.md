@@ -141,9 +141,9 @@ Copy the existing Deployment `spec.template` into the Custom Resource, apply, th
 Applying a CR whose name matches an existing Deployment **adopts** it via server-side apply (no pod churn if the template matches.)
 
 ### Application versions
-By default, the operator generates and inject a DBOS application version using the `DBOS__APPVERSION` environment variable.
+The operator generates and injects a DBOS application version using the `DBOS__APPVERSION` environment variable.
 Internally it uses that version to record which CR manifest should be used to run old application versions.
-You can set `DBOS__APPVERSION` yourself: the operator will replace mapped version entries with the latest CR manifest. The pin must be a literal `value`; a `valueFrom` (or empty) pin is rejected, because the operator cannot record which template belongs to a version it cannot read.
+`DBOS__APPVERSION` is operator-owned: setting it in `spec.template` is rejected, because the operator must be able to map every version to the exact template that produced it, and a user-managed pin can name different templates over time.
 
 ## Pointing KEDA to the operator
 

@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 	"time"
 
@@ -136,28 +137,34 @@ func result(polledAt time.Time, versions ...conductor.VersionRecommendation) sto
 	return store.Result{OldVersions: versions, PolledAt: polledAt}
 }
 
+func seededVersion(n int) string {
+	return fmt.Sprintf("%d-%016d", n, n)
+}
+
 // Drain deployments are only built from snapshots; tests seed one per version.
 func ownedSnapshots(versions ...string) []*unstructured.Unstructured {
 	var out []*unstructured.Unstructured
 	for _, v := range versions {
+		hash, _ := parseSeededVersion(v)
 		template, _, _ := unstructured.NestedMap(testCR().Object, "spec", "template")
-		out = append(out, snapshotFor(snapshotName("myapp", v), "", template))
+		out = append(out, snapshotFor(snapshotName("myapp", hash), "", template))
 	}
 	return out
 }
 
 func TestReconcileOldVersionsApplies(t *testing.T) {
+	v1, v2 := seededVersion(1), seededVersion(2)
 	f := newVersionFixture(t, result(time.Now(),
-		conductor.VersionRecommendation{ApplicationVersion: "v1", DesiredExecutors: 3},
-		conductor.VersionRecommendation{ApplicationVersion: "v2", DesiredExecutors: 7},
-	), ownedSnapshots("v1", "v2")...)
+		conductor.VersionRecommendation{ApplicationVersion: v1, DesiredExecutors: 3},
+		conductor.VersionRecommendation{ApplicationVersion: v2, DesiredExecutors: 7},
+	), ownedSnapshots(v1, v2)...)
 	f.reconcile(t)
 
 	applied := f.applied(t)
 	if len(applied) != 2 {
 		t.Fatalf("applied %d deployments, want 2: %v", len(applied), applied)
 	}
-	for version, wantReplicas := range map[string]int{"v1": 3, "v2": 7} {
+	for version, wantReplicas := range map[string]int{v1: 3, v2: 7} {
 		manifest, ok := applied[versionDeploymentName("myapp", version)]
 		if !ok {
 			t.Fatalf("no apply for version %q: %v", version, applied)
@@ -186,12 +193,13 @@ func TestReconcileOldVersionsApplies(t *testing.T) {
 }
 
 func TestReconcileOldVersionsParksZeroDesiredWithoutDeleting(t *testing.T) {
+	v1 := seededVersion(1)
 	f := newVersionFixture(t, result(time.Now(),
-		conductor.VersionRecommendation{ApplicationVersion: "v1", DesiredExecutors: 0},
-	), append(ownedSnapshots("v1"), versionDeployment(versionDeploymentName("myapp", "v1"), versionSlug("v1"), true))...)
+		conductor.VersionRecommendation{ApplicationVersion: v1, DesiredExecutors: 0},
+	), append(ownedSnapshots(v1), versionDeployment(versionDeploymentName("myapp", v1), versionSlug(v1), true))...)
 	f.reconcile(t)
 
-	manifest, ok := f.applied(t)[versionDeploymentName("myapp", "v1")]
+	manifest, ok := f.applied(t)[versionDeploymentName("myapp", v1)]
 	if !ok {
 		t.Fatalf("no apply for the zero-desired version: %v", f.applied(t))
 	}
@@ -204,13 +212,14 @@ func TestReconcileOldVersionsParksZeroDesiredWithoutDeleting(t *testing.T) {
 }
 
 func TestReconcileOldVersionsDeletesDepartedVersions(t *testing.T) {
-	staying := versionDeploymentName("myapp", "v1")
-	departed := versionDeploymentName("myapp", "v0")
+	v0, v1 := seededVersion(0), seededVersion(1)
+	staying := versionDeploymentName("myapp", v1)
+	departed := versionDeploymentName("myapp", v0)
 	f := newVersionFixture(t, result(time.Now(),
-		conductor.VersionRecommendation{ApplicationVersion: "v1", DesiredExecutors: 2},
-	), append(ownedSnapshots("v1"),
-		versionDeployment(staying, versionSlug("v1"), true),
-		versionDeployment(departed, versionSlug("v0"), true),
+		conductor.VersionRecommendation{ApplicationVersion: v1, DesiredExecutors: 2},
+	), append(ownedSnapshots(v1),
+		versionDeployment(staying, versionSlug(v1), true),
+		versionDeployment(departed, versionSlug(v0), true),
 	)...)
 	f.reconcile(t)
 
@@ -306,16 +315,17 @@ func setMaxOldVersionsReplicas(t *testing.T, cr *unstructured.Unstructured, cap 
 }
 
 func TestReconcileOldVersionsBudgetSpreadsEqually(t *testing.T) {
+	v0, v1, v2 := seededVersion(0), seededVersion(1), seededVersion(2)
 	f := newVersionFixture(t, result(time.Now(),
-		conductor.VersionRecommendation{ApplicationVersion: "v2", DesiredExecutors: 8},
-		conductor.VersionRecommendation{ApplicationVersion: "v1", DesiredExecutors: 2},
-		conductor.VersionRecommendation{ApplicationVersion: "v0", DesiredExecutors: 1},
-	), append(ownedSnapshots("v0", "v1", "v2"), latestDeployment(4, 4))...)
+		conductor.VersionRecommendation{ApplicationVersion: v2, DesiredExecutors: 8},
+		conductor.VersionRecommendation{ApplicationVersion: v1, DesiredExecutors: 2},
+		conductor.VersionRecommendation{ApplicationVersion: v0, DesiredExecutors: 1},
+	), append(ownedSnapshots(v0, v1, v2), latestDeployment(4, 4))...)
 	setMaxOldVersionsReplicas(t, f.cr, 6)
 	f.reconcile(t)
 
 	applied := f.applied(t)
-	for version, wantReplicas := range map[string]int{"v2": 3, "v1": 2, "v0": 1} {
+	for version, wantReplicas := range map[string]int{v2: 3, v1: 2, v0: 1} {
 		manifest, ok := applied[versionDeploymentName("myapp", version)]
 		if !ok {
 			t.Fatalf("no apply for version %q: %v", version, applied)
@@ -327,16 +337,17 @@ func TestReconcileOldVersionsBudgetSpreadsEqually(t *testing.T) {
 }
 
 func TestReconcileOldVersionsBudgetParksOldestAtZero(t *testing.T) {
+	v0, v1, v2 := seededVersion(0), seededVersion(1), seededVersion(2)
 	f := newVersionFixture(t, result(time.Now(),
-		conductor.VersionRecommendation{ApplicationVersion: "v2", DesiredExecutors: 5},
-		conductor.VersionRecommendation{ApplicationVersion: "v1", DesiredExecutors: 5},
-		conductor.VersionRecommendation{ApplicationVersion: "v0", DesiredExecutors: 5},
-	), append(ownedSnapshots("v0", "v1", "v2"), latestDeployment(1, 1))...)
+		conductor.VersionRecommendation{ApplicationVersion: v2, DesiredExecutors: 5},
+		conductor.VersionRecommendation{ApplicationVersion: v1, DesiredExecutors: 5},
+		conductor.VersionRecommendation{ApplicationVersion: v0, DesiredExecutors: 5},
+	), append(ownedSnapshots(v0, v1, v2), latestDeployment(1, 1))...)
 	setMaxOldVersionsReplicas(t, f.cr, 2)
 	f.reconcile(t)
 
 	applied := f.applied(t)
-	for version, wantReplicas := range map[string]int{"v2": 1, "v1": 1, "v0": 0} {
+	for version, wantReplicas := range map[string]int{v2: 1, v1: 1, v0: 0} {
 		manifest, ok := applied[versionDeploymentName("myapp", version)]
 		if !ok {
 			t.Fatalf("no apply for version %q: %v", version, applied)
@@ -351,16 +362,17 @@ func TestReconcileOldVersionsBudgetParksOldestAtZero(t *testing.T) {
 }
 
 func TestReconcileOldVersionsBudgetIgnoresRollout(t *testing.T) {
+	v0, v1, v2 := seededVersion(0), seededVersion(1), seededVersion(2)
 	f := newVersionFixture(t, result(time.Now(),
-		conductor.VersionRecommendation{ApplicationVersion: "v2", DesiredExecutors: 8},
-		conductor.VersionRecommendation{ApplicationVersion: "v1", DesiredExecutors: 2},
-		conductor.VersionRecommendation{ApplicationVersion: "v0", DesiredExecutors: 1},
-	), append(ownedSnapshots("v0", "v1", "v2"), latestDeployment(4, 6))...)
+		conductor.VersionRecommendation{ApplicationVersion: v2, DesiredExecutors: 8},
+		conductor.VersionRecommendation{ApplicationVersion: v1, DesiredExecutors: 2},
+		conductor.VersionRecommendation{ApplicationVersion: v0, DesiredExecutors: 1},
+	), append(ownedSnapshots(v0, v1, v2), latestDeployment(4, 6))...)
 	setMaxOldVersionsReplicas(t, f.cr, 6)
 	f.reconcile(t)
 
 	applied := f.applied(t)
-	for version, wantReplicas := range map[string]int{"v2": 3, "v1": 2, "v0": 1} {
+	for version, wantReplicas := range map[string]int{v2: 3, v1: 2, v0: 1} {
 		if got := appliedReplicas(t, applied[versionDeploymentName("myapp", version)]); got != wantReplicas {
 			t.Errorf("version %q replicas = %d, want %d", version, got, wantReplicas)
 		}
@@ -368,13 +380,14 @@ func TestReconcileOldVersionsBudgetIgnoresRollout(t *testing.T) {
 }
 
 func TestReconcileOldVersionsBudgetZeroParksAll(t *testing.T) {
+	v1 := seededVersion(1)
 	f := newVersionFixture(t, result(time.Now(),
-		conductor.VersionRecommendation{ApplicationVersion: "v1", DesiredExecutors: 9},
-	), append(ownedSnapshots("v1"), latestDeployment(4, 4))...)
+		conductor.VersionRecommendation{ApplicationVersion: v1, DesiredExecutors: 9},
+	), append(ownedSnapshots(v1), latestDeployment(4, 4))...)
 	setMaxOldVersionsReplicas(t, f.cr, 0)
 	f.reconcile(t)
 
-	manifest, ok := f.applied(t)[versionDeploymentName("myapp", "v1")]
+	manifest, ok := f.applied(t)[versionDeploymentName("myapp", v1)]
 	if !ok {
 		t.Fatalf("no apply for v1: %v", f.applied(t))
 	}
@@ -387,12 +400,13 @@ func TestReconcileOldVersionsBudgetZeroParksAll(t *testing.T) {
 }
 
 func TestReconcileOldVersionsUnbudgetedWithoutCap(t *testing.T) {
+	v1 := seededVersion(1)
 	f := newVersionFixture(t, result(time.Now(),
-		conductor.VersionRecommendation{ApplicationVersion: "v1", DesiredExecutors: 7},
-	), append(ownedSnapshots("v1"), latestDeployment(1, 1))...)
+		conductor.VersionRecommendation{ApplicationVersion: v1, DesiredExecutors: 7},
+	), append(ownedSnapshots(v1), latestDeployment(1, 1))...)
 	f.reconcile(t)
 
-	manifest, ok := f.applied(t)[versionDeploymentName("myapp", "v1")]
+	manifest, ok := f.applied(t)[versionDeploymentName("myapp", v1)]
 	if !ok {
 		t.Fatalf("no apply for v1: %v", f.applied(t))
 	}

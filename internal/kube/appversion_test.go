@@ -94,18 +94,18 @@ func TestHashTemplateCanonical(t *testing.T) {
 }
 
 func TestSeededVersionRoundTrip(t *testing.T) {
-	version := mintSeededVersion("9f2c41ab8de3", time.Unix(0, 1754300000000123456))
-	if version != "1754300000000123456-9f2c41ab8de3" {
+	version := mintSeededVersion("9f2c41ab8de30a17", time.Unix(0, 1754300000000123456))
+	if version != "1754300000000123456-9f2c41ab8de30a17" {
 		t.Errorf("mintSeededVersion = %q", version)
 	}
 	hash, ok := parseSeededVersion(version)
-	if !ok || hash != "9f2c41ab8de3" {
+	if !ok || hash != "9f2c41ab8de30a17" {
 		t.Errorf("parseSeededVersion(%q) = %q, %v", version, hash, ok)
 	}
 	if got := versionSlug(version); got != version {
 		t.Errorf("versionSlug(%q) = %q, want identity", version, got)
 	}
-	for _, in := range []string{"v1.2.3", "authored", "123-DEADBEEFDEAD", "123-9f2c", ""} {
+	for _, in := range []string{"v1.2.3", "authored", "123-DEADBEEFDEADBEEF", "123-9f2c41ab8de3", ""} {
 		if _, ok := parseSeededVersion(in); ok {
 			t.Errorf("parseSeededVersion(%q) accepted a non-seeded version", in)
 		}
@@ -156,7 +156,7 @@ func TestReconcileDeploymentReusesLiveVersion(t *testing.T) {
 }
 
 func TestReconcileDeploymentMintsOnTemplateChange(t *testing.T) {
-	stale := "1754300000000123456-aaaaaaaaaaaa" // hash of a template long gone
+	stale := "1754300000000123456-aaaaaaaaaaaaaaaa" // hash of a template long gone
 	f := newVersionFixture(t, result(time.Now()), mainDeployment(stale))
 	if err := f.manager.reconcileDeployment(context.Background(), f.cr, klog.Background()); err != nil {
 		t.Fatalf("reconcileDeployment: %v", err)
@@ -170,35 +170,16 @@ func TestReconcileDeploymentMintsOnTemplateChange(t *testing.T) {
 	}
 }
 
-func TestReconcileDeploymentRespectsAuthoredPin(t *testing.T) {
-	f := newVersionFixture(t, result(time.Now()))
-	container := map[string]any{
-		"name": "app", "image": "img:v1",
-		"env": []any{map[string]any{"name": appVersionEnv, "value": "authored-v7"}},
-	}
-	_ = unstructured.SetNestedSlice(f.cr.Object, []any{container}, "spec", "template", "spec", "containers")
-	if err := f.manager.reconcileDeployment(context.Background(), f.cr, klog.Background()); err != nil {
-		t.Fatalf("reconcileDeployment: %v", err)
-	}
-	if got := appVersionOf(t, f.applied(t)["myapp"]); got != "authored-v7" {
-		t.Errorf("version = %q, want the authored pin untouched", got)
-	}
-	if _, err := f.client.Resource(gvrControllerRevision).Namespace("dbos").Get(
-		context.Background(), "myapp-tpl-authored-v7", metav1.GetOptions{}); err != nil {
-		t.Errorf("snapshot for the authored version not created: %v", err)
-	}
-}
-
 func TestApplyVersionDeploymentUsesSnapshot(t *testing.T) {
-	oldVersion := "1754300000000123456-aaaaaaaaaaaa"
-	orphan := "1754300000000123457-bbbbbbbbbbbb"
+	oldVersion := "1754300000000123456-aaaaaaaaaaaaaaaa"
+	orphan := "1754300000000123457-bbbbbbbbbbbbbbbb"
 	oldTemplate := map[string]any{"spec": map[string]any{
 		"containers": []any{map[string]any{"name": "app", "image": "img:old"}},
 	}}
 	f := newVersionFixture(t, result(time.Now(),
 		conductor.VersionRecommendation{ApplicationVersion: oldVersion, DesiredExecutors: 2},
 		conductor.VersionRecommendation{ApplicationVersion: orphan, DesiredExecutors: 1},
-	), snapshotFor("myapp-tpl-aaaaaaaaaaaa", "aaaaaaaaaaaa", oldTemplate))
+	), snapshotFor("myapp-tpl-aaaaaaaaaaaaaaaa", "aaaaaaaaaaaaaaaa", oldTemplate))
 	err := f.manager.reconcileOldVersions(context.Background(), f.cr, klog.Background())
 	if err == nil || !strings.Contains(err.Error(), orphan) {
 		t.Fatalf("reconcileOldVersions = %v, want an error naming the snapshot-less version %q", err, orphan)
@@ -218,24 +199,29 @@ func TestApplyVersionDeploymentUsesSnapshot(t *testing.T) {
 	}
 }
 
-func TestReconcileDeploymentRejectsValueFromPin(t *testing.T) {
-	f := newVersionFixture(t, result(time.Now()))
-	container := map[string]any{
-		"name": "app", "image": "img:v1",
-		"env": []any{map[string]any{
+func TestReconcileDeploymentRejectsUserPin(t *testing.T) {
+	cases := map[string]map[string]any{
+		"literal": {"name": appVersionEnv, "value": "authored-v7"},
+		"valueFrom": {
 			"name": appVersionEnv,
 			"valueFrom": map[string]any{"configMapKeyRef": map[string]any{
 				"name": "release-info", "key": "version",
 			}},
-		}},
+		},
 	}
-	_ = unstructured.SetNestedSlice(f.cr.Object, []any{container}, "spec", "template", "spec", "containers")
-	err := f.manager.reconcileDeployment(context.Background(), f.cr, klog.Background())
-	if err == nil || !strings.Contains(err.Error(), appVersionEnv) {
-		t.Fatalf("reconcileDeployment = %v, want a rejection naming %s", err, appVersionEnv)
-	}
-	if _, ok := f.applied(t)["myapp"]; ok {
-		t.Error("deployment applied despite the unreadable version pin")
+	for name, pin := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newVersionFixture(t, result(time.Now()))
+			container := map[string]any{"name": "app", "image": "img:v1", "env": []any{pin}}
+			_ = unstructured.SetNestedSlice(f.cr.Object, []any{container}, "spec", "template", "spec", "containers")
+			err := f.manager.reconcileDeployment(context.Background(), f.cr, klog.Background())
+			if err == nil || !strings.Contains(err.Error(), appVersionEnv) {
+				t.Fatalf("reconcileDeployment = %v, want a rejection naming %s", err, appVersionEnv)
+			}
+			if _, ok := f.applied(t)["myapp"]; ok {
+				t.Error("deployment applied despite the user pin")
+			}
+		})
 	}
 }
 
@@ -250,27 +236,15 @@ func TestEnsureSnapshotConflicts(t *testing.T) {
 
 	seeded := mintSeededVersion(hash, time.Unix(0, 1))
 	f := newVersionFixture(t, result(time.Now()),
-		snapshotFor(snapshotName("myapp", seeded), "cccccccccccc", nil))
+		snapshotFor(snapshotName("myapp", hash), "cccccccccccccccc", nil))
 	err = f.manager.ensureSnapshot(context.Background(), f.cr, seeded, hash, template, klog.Background())
 	if err == nil {
-		t.Error("seeded-version hash conflict must error, not overwrite")
+		t.Error("hash conflict must error, not overwrite")
 	}
 
 	f = newVersionFixture(t, result(time.Now()),
-		snapshotFor(snapshotName("myapp", "authored-v7"), "cccccccccccc", nil))
-	if err := f.manager.ensureSnapshot(context.Background(), f.cr, "authored-v7", hash, template, klog.Background()); err != nil {
-		t.Fatalf("authored-version snapshot replace: %v", err)
-	}
-	snap, err := f.client.Resource(gvrControllerRevision).Namespace("dbos").Get(
-		context.Background(), snapshotName("myapp", "authored-v7"), metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("replaced snapshot missing: %v", err)
-	}
-	if got := snap.GetAnnotations()[snapshotHashAnnotation]; got != hash {
-		t.Errorf("replaced snapshot hash = %q, want %q", got, hash)
-	}
-
-	if err := f.manager.ensureSnapshot(context.Background(), f.cr, "authored-v7", hash, template, klog.Background()); err != nil {
+		snapshotFor(snapshotName("myapp", hash), hash, nil))
+	if err := f.manager.ensureSnapshot(context.Background(), f.cr, seeded, hash, template, klog.Background()); err != nil {
 		t.Errorf("matching snapshot must be a no-op, got %v", err)
 	}
 }
