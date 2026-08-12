@@ -62,13 +62,7 @@ func versionDeploymentName(app, version string) string {
 
 // spec.replicas is written directly — old versions have no ScaledObject.
 func buildVersionDeployment(cr *unstructured.Unstructured, version string, replicas int, template map[string]any) (map[string]any, error) {
-	var deployment map[string]any
-	var err error
-	if template != nil {
-		deployment, err = assembleDeployment(cr, template)
-	} else {
-		deployment, err = buildDeployment(cr)
-	}
+	deployment, err := assembleDeployment(cr, template)
 	if err != nil {
 		return nil, err
 	}
@@ -254,10 +248,15 @@ func (m *Manager) reconcileOldVersions(ctx context.Context, cr *unstructured.Uns
 	return nil
 }
 
+// A version with no snapshot is an error, never rebuilt from the current CR
+// template — the wrong pod spec under an old identity.
 func (m *Manager) applyVersionDeployment(ctx context.Context, cr *unstructured.Unstructured, version string, replicas int) error {
-	template, _, err := m.snapshotTemplate(ctx, cr, version)
+	template, ok, err := m.snapshotTemplate(ctx, cr, version)
 	if err != nil {
 		return fmt.Errorf("snapshot for version %q: %w", version, err)
+	}
+	if !ok {
+		return fmt.Errorf("no template snapshot for version %q; refusing to run it on the current template", version)
 	}
 	deployment, err := buildVersionDeployment(cr, version, replicas, template)
 	if err != nil {

@@ -3,6 +3,7 @@ package kube
 import (
 	"context"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -198,23 +199,43 @@ func TestApplyVersionDeploymentUsesSnapshot(t *testing.T) {
 		conductor.VersionRecommendation{ApplicationVersion: oldVersion, DesiredExecutors: 2},
 		conductor.VersionRecommendation{ApplicationVersion: orphan, DesiredExecutors: 1},
 	), snapshotFor("myapp-tpl-aaaaaaaaaaaa", "aaaaaaaaaaaa", oldTemplate))
-	f.reconcile(t)
+	err := f.manager.reconcileOldVersions(context.Background(), f.cr, klog.Background())
+	if err == nil || !strings.Contains(err.Error(), orphan) {
+		t.Fatalf("reconcileOldVersions = %v, want an error naming the snapshot-less version %q", err, orphan)
+	}
 
 	applied := f.applied(t)
-	imageOf := func(name string) string {
-		containers, _, _ := unstructured.NestedSlice(applied[name], "spec", "template", "spec", "containers")
-		image, _, _ := unstructured.NestedString(containers[0].(map[string]any), "image")
-		return image
-	}
 	snapshotted := versionDeploymentName("myapp", oldVersion)
-	if got := imageOf(snapshotted); got != "img:old" {
-		t.Errorf("snapshotted version image = %q, want img:old", got)
+	containers, _, _ := unstructured.NestedSlice(applied[snapshotted], "spec", "template", "spec", "containers")
+	if image, _, _ := unstructured.NestedString(containers[0].(map[string]any), "image"); image != "img:old" {
+		t.Errorf("snapshotted version image = %q, want img:old", image)
 	}
 	if got := appVersionOf(t, applied[snapshotted]); got != oldVersion {
 		t.Errorf("pinned DBOS__APPVERSION = %q, want the full version %q", got, oldVersion)
 	}
-	if got := imageOf(versionDeploymentName("myapp", orphan)); got != "img:v1" {
-		t.Errorf("snapshot-less version image = %q, want the CR fallback img:v1", got)
+	if _, ok := applied[versionDeploymentName("myapp", orphan)]; ok {
+		t.Error("snapshot-less version was applied; want it refused")
+	}
+}
+
+func TestReconcileDeploymentRejectsValueFromPin(t *testing.T) {
+	f := newVersionFixture(t, result(time.Now()))
+	container := map[string]any{
+		"name": "app", "image": "img:v1",
+		"env": []any{map[string]any{
+			"name": appVersionEnv,
+			"valueFrom": map[string]any{"configMapKeyRef": map[string]any{
+				"name": "release-info", "key": "version",
+			}},
+		}},
+	}
+	_ = unstructured.SetNestedSlice(f.cr.Object, []any{container}, "spec", "template", "spec", "containers")
+	err := f.manager.reconcileDeployment(context.Background(), f.cr, klog.Background())
+	if err == nil || !strings.Contains(err.Error(), appVersionEnv) {
+		t.Fatalf("reconcileDeployment = %v, want a rejection naming %s", err, appVersionEnv)
+	}
+	if _, ok := f.applied(t)["myapp"]; ok {
+		t.Error("deployment applied despite the unreadable version pin")
 	}
 }
 

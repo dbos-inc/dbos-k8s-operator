@@ -50,7 +50,8 @@ func TestBuildVersionDeployment(t *testing.T) {
 	}
 	_ = unstructured.SetNestedSlice(cr.Object, []any{container}, "spec", "template", "spec", "containers")
 
-	d, err := buildVersionDeployment(cr, "v1", 3, nil)
+	template, _, _ := unstructured.NestedMap(cr.Object, "spec", "template")
+	d, err := buildVersionDeployment(cr, "v1", 3, template)
 	if err != nil {
 		t.Fatalf("buildVersionDeployment: %v", err)
 	}
@@ -105,7 +106,8 @@ func TestBuildVersionDeployment(t *testing.T) {
 func TestBuildVersionDeploymentCarriesNoStrategy(t *testing.T) {
 	cr := testCR()
 	_ = unstructured.SetNestedField(cr.Object, "2", "spec", "strategy", "rollingUpdate", "maxSurge")
-	d, err := buildVersionDeployment(cr, "v1", 3, nil)
+	template, _, _ := unstructured.NestedMap(cr.Object, "spec", "template")
+	d, err := buildVersionDeployment(cr, "v1", 3, template)
 	if err != nil {
 		t.Fatalf("buildVersionDeployment: %v", err)
 	}

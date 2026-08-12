@@ -135,17 +135,19 @@ func appName(cr *unstructured.Unstructured) string {
 	return cr.GetName()
 }
 
-// The template snapshot is captured before the apply — it must exist before
-// any pod of the version can register.
 func (m *Manager) reconcileDeployment(ctx context.Context, cr *unstructured.Unstructured, logger klog.Logger) error {
+	// Get the CR definition as provided (and thus, desired) by the user
 	template, ok, err := unstructured.NestedMap(cr.Object, "spec", "template")
 	if err != nil || !ok {
 		return fmt.Errorf("spec.template missing or malformed: %v", err)
 	}
+	// Resolve with DBOS__APPVERSION this CR uses.
+	// User-provided authored values win, otherwise a seeded version is minted and pinned.
 	version, seeded, err := m.resolveAppVersion(ctx, cr, template, logger)
 	if err != nil {
 		return err
 	}
+	// Build the deployment manifest
 	deployment, err := buildDeployment(cr)
 	if err != nil {
 		return err
@@ -153,21 +155,20 @@ func (m *Manager) reconcileDeployment(ctx context.Context, cr *unstructured.Unst
 	if err := copySpecFields(deployment, cr); err != nil {
 		return err
 	}
+	// If we generated a version, inject it in the deployment manifest.
 	if seeded {
 		if err := pinAppVersion(deployment, version); err != nil {
 			return err
 		}
 	}
-	// "" only for an authored valueFrom pin: nothing to snapshot.
-	if version != "" {
-		hash, err := hashTemplate(template)
-		if err != nil {
-			return err
-		}
-		if err := m.ensureSnapshot(ctx, cr, version, hash, template, logger); err != nil {
-			return err
-		}
+	hash, err := hashTemplate(template)
+	if err != nil {
+		return err
 	}
+	if err := m.ensureSnapshot(ctx, cr, version, hash, template, logger); err != nil {
+		return err
+	}
+	// Reconcile the Deployment with kubernetes
 	payload, err := json.Marshal(deployment)
 	if err != nil {
 		return err
@@ -182,14 +183,14 @@ func (m *Manager) reconcileDeployment(ctx context.Context, cr *unstructured.Unst
 }
 
 var specFieldsNotCopied = map[string]bool{
-	"appName":                true,
-	"maxOldVersionsReplicas": true,
-	"template":               true,
-	"replicas":               true,
-	"selector":               true,
+	"appName":                true, // Operator configuration
+	"maxOldVersionsReplicas": true, // Operator configuration
+	"template":               true, // Already produced by buildDeployment
+	"replicas":               true, // Owned by KEDA and/or the operator
+	"selector":               true, // Operator-owned. Used to "partition" old version pods.
 }
 
-// Main Deployment only — versioned drain Deployments must not surge.
+// Pass through other user-provided fields, outside of spec.template. Latest deployment only.
 func copySpecFields(deployment map[string]any, cr *unstructured.Unstructured) error {
 	spec, ok, err := unstructured.NestedMap(cr.Object, "spec")
 	if err != nil || !ok {
@@ -197,6 +198,7 @@ func copySpecFields(deployment map[string]any, cr *unstructured.Unstructured) er
 	}
 	target := deployment["spec"].(map[string]any)
 	for key, value := range spec {
+		// Some fields are ignored. See map above.
 		if specFieldsNotCopied[key] {
 			continue
 		}
@@ -235,13 +237,13 @@ func assembleDeployment(cr *unstructured.Unstructured, template map[string]any) 
 				"app":                          cr.GetName(),
 				"app.kubernetes.io/managed-by": fieldManager,
 			},
-			"ownerReferences": []any{crOwnerReference(cr)},
+			"ownerReferences": []any{crOwnerReference(cr)}, // The Deployment is owned by the CR: mark the relationship so the Deployment is deleted when the CR is deleted.
 		},
 		"spec": map[string]any{
 			"selector": map[string]any{
 				"matchLabels": map[string]any{"app": cr.GetName()},
 			},
-			"template": template,
+			"template": template, // Pass through user-provided spec.template, with injected labels and pinned DBOS__APPVERSION if any.
 		},
 	}, nil
 }
@@ -252,8 +254,8 @@ func crOwnerReference(cr *unstructured.Unstructured) map[string]any {
 		"kind":               "DBOSApplication",
 		"name":               cr.GetName(),
 		"uid":                string(cr.GetUID()),
-		"controller":         true,
-		"blockOwnerDeletion": true,
+		"controller":         true, // A k8s object can have only one controller -- in this case, the DBOSApplication CR.
+		"blockOwnerDeletion": true, // Require the deployment is deleted before the CR can be deleted. This is a safety measure to avoid orphaned deployments.
 	}
 }
 
