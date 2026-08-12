@@ -86,6 +86,7 @@ func (m *Manager) Run(ctx context.Context) {
 }
 
 func (m *Manager) reconcileAll(ctx context.Context, logger klog.Logger) error {
+	// First, list all DBOSApplications Custom Resources
 	var list *unstructured.UnstructuredList
 	var err error
 	if m.opts.Namespace != "" {
@@ -97,6 +98,7 @@ func (m *Manager) reconcileAll(ctx context.Context, logger klog.Logger) error {
 		return fmt.Errorf("list DBOSApplications: %w", err)
 	}
 
+	// For each live CR, reconcile its Deployment and ensure a poller is running. Then stop any pollers for removed CRs.
 	live := map[string]bool{}
 	for i := range list.Items {
 		cr := &list.Items[i]

@@ -41,10 +41,11 @@ spec:
               required: [template]
               # Beyond the fields documented below, any Deployment.spec field
               # except replicas (autoscaler-owned) and selector
-              # (operator-owned) — minReadySeconds, progressDeadlineSeconds,
-              # ... — is accepted and passed through verbatim to the app's
-              # main Deployment. Unknown fields are not validated here; a
-              # bogus field surfaces as an apply error in the operator log.
+              # (operator-owned) — strategy, minReadySeconds,
+              # progressDeadlineSeconds, ... — is accepted and passed through
+              # verbatim to the app's main Deployment. Unknown fields are not
+              # validated here; a bogus field surfaces as an apply error in
+              # the operator log.
               x-kubernetes-preserve-unknown-fields: true
               properties:
                 appName:
@@ -65,16 +66,6 @@ spec:
                     verbatim — at least 1 unless the Conductor policy's
                     rollout cap says less (a cap of 0 parks the version at
                     zero replicas until it drains).
-                strategy:
-                  description: >-
-                    Update strategy for the app's main Deployment, exactly as
-                    in Deployment.spec.strategy (type,
-                    rollingUpdate.maxSurge, rollingUpdate.maxUnavailable) —
-                    passed through verbatim. Old-version drain Deployments
-                    are unaffected; their sizing is governed solely by
-                    maxOldVersionsReplicas.
-                  type: object
-                  x-kubernetes-preserve-unknown-fields: true
                 template:
                   description: >-
                     Pod template for the app, exactly as in
