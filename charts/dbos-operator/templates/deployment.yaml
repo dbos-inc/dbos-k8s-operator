@@ -33,11 +33,11 @@ spec:
           env:
             - name: DBOS_DOMAIN
               value: {{ .Values.dbosDomain | quote }}
-            - name: DBOS_CONDUCTOR_LICENSE_KEY
+            - name: DBOS_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.conductorLicenseKey.existingSecret | quote }}
-                  key: {{ .Values.conductorLicenseKey.key | quote }}
+                  name: {{ .Values.apiKey.existingSecret | quote }}
+                  key: {{ .Values.apiKey.key | quote }}
           ports:
             # Plain-HTTP metrics endpoint for KEDA's metrics-api scaler:
             # GET /apps/<app>/autoscale

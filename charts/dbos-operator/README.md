@@ -12,8 +12,8 @@ helm install dbos-operator oci://ghcr.io/dbos-inc/charts/dbos-operator \
   -n dbos-operator --create-namespace \
   --set config.orgName=<your-org>
 
-kubectl -n dbos-operator create secret generic dbos-conductor-license-key \
-  --from-literal=token=<your Conductor API key>
+kubectl -n dbos-operator create secret generic dbos-api-key \
+  --from-literal=token=<your DBOS API key>
 ```
 
 KEDA is not part of this chart — install it once per cluster from the
@@ -33,8 +33,8 @@ upstream release manifest, then point a `ScaledObject` metrics-api trigger at
 | `config.watchNamespace` | `""` | Namespace to watch; empty = all |
 | `config.reconcileInterval` | `10s` | CR re-list / Deployment re-apply cadence |
 | `dbosDomain` | `cloud.dbos.dev` | Used only when `config.endpoint` is empty |
-| `conductorLicenseKey.existingSecret` | `dbos-conductor-license-key` | Secret holding the Conductor license key |
-| `conductorLicenseKey.key` | `token` | Key within that secret |
+| `apiKey.existingSecret` | `dbos-api-key` | Secret holding the DBOS API key (org-scoped Conductor credential) |
+| `apiKey.key` | `token` | Key within that secret |
 | `image.repository` | `ghcr.io/dbos-inc/dbos-k8s-operator` | Operator image |
 | `image.tag` | chart `appVersion` | Image tag override |
 | `crds.install` | `true` | Manage the DBOSApplication CRD with the chart (kept on uninstall) |

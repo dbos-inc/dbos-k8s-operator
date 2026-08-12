@@ -177,7 +177,7 @@ func (m *Manager) reconcileDeployment(ctx context.Context, cr *unstructured.Unst
 	if err != nil {
 		return err
 	}
-	if err := setStrategy(deployment, cr); err != nil {
+	if err := copySpecFields(deployment, cr); err != nil {
 		return err
 	}
 	if seeded {
@@ -208,31 +208,45 @@ func (m *Manager) reconcileDeployment(ctx context.Context, cr *unstructured.Unst
 	return nil
 }
 
-// setStrategy copies the CR's spec.strategy — same shape and field names as
-// Deployment.spec.strategy — onto the main Deployment, verbatim. Only the
-// main Deployment gets it: versioned drain Deployments must not surge on
-// their own, since their replica counts are exact allocations of the
-// spec.maxOldVersionsReplicas budget (see drainBudget) and a surge would
-// exceed it. A CR without a strategy leaves the field to the Deployment
-// defaults.
-func setStrategy(deployment map[string]any, cr *unstructured.Unstructured) error {
-	strategy, ok, err := unstructured.NestedMap(cr.Object, "spec", "strategy")
-	if err != nil {
-		return fmt.Errorf("spec.strategy malformed: %v", err)
+// specFieldsNotCopied are the CR spec fields that never pass through to the
+// Deployment: the DBOS extras, and the fields the operator or autoscaler owns.
+var specFieldsNotCopied = map[string]bool{
+	"appName":                true, // Conductor app name, not a Deployment field
+	"maxOldVersionsReplicas": true, // drain budget, consumed by reconcileOldVersions
+	"template":               true, // passed through by assembleDeployment after label injection
+	"replicas":               true, // autoscaler-owned; the operator never writes it
+	"selector":               true, // operator-owned; derived from the CR name
+}
+
+// copySpecFields copies every other CR spec field (strategy, minReadySeconds,
+// progressDeadlineSeconds, ...) onto the main Deployment's spec, verbatim —
+// the CR spec is a DeploymentSpec plus the DBOS extras, so unknown-to-us
+// fields are the API server's to validate at apply time. Only the main
+// Deployment gets these: versioned drain Deployments hold exact allocations
+// of the spec.maxOldVersionsReplicas budget (see drainBudget) and must not
+// surge or otherwise deviate from them.
+func copySpecFields(deployment map[string]any, cr *unstructured.Unstructured) error {
+	spec, ok, err := unstructured.NestedMap(cr.Object, "spec")
+	if err != nil || !ok {
+		return fmt.Errorf("spec missing or malformed: %v", err)
 	}
-	if !ok || len(strategy) == 0 {
-		return nil
+	target := deployment["spec"].(map[string]any)
+	for key, value := range spec {
+		if specFieldsNotCopied[key] {
+			continue
+		}
+		target[key] = value
 	}
-	return unstructured.SetNestedMap(deployment, strategy, "spec", "strategy")
+	return nil
 }
 
 // buildDeployment derives the Deployment manifest from a DBOSApplication. The
 // pod template passes through verbatim; the operator only asserts the
 // name/namespace, the selector labels, and the owner reference.
 // spec.replicas is deliberately never applied so the autoscaler owns it (a new
-// Deployment defaults to 1), and spec.strategy is set by reconcileDeployment
-// for the main Deployment only — never here, where versioned Deployments
-// would inherit it.
+// Deployment defaults to 1), and the remaining spec fields are copied by
+// reconcileDeployment (copySpecFields) for the main Deployment only — never
+// here, where versioned Deployments would inherit them.
 func buildDeployment(cr *unstructured.Unstructured) (map[string]any, error) {
 	template, ok, err := unstructured.NestedMap(cr.Object, "spec", "template")
 	if err != nil || !ok {

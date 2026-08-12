@@ -1,9 +1,9 @@
 DBOS operator installed as release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
 
-1. Create the Conductor credential secret (if not already present):
+1. Create the DBOS API key secret (if not already present):
 
-   kubectl -n {{ .Release.Namespace }} create secret generic {{ .Values.conductorLicenseKey.existingSecret }} \
-     --from-literal={{ .Values.conductorLicenseKey.key }}=<your Conductor license key>
+   kubectl -n {{ .Release.Namespace }} create secret generic {{ .Values.apiKey.existingSecret }} \
+     --from-literal={{ .Values.apiKey.key }}=<your DBOS API key>
 
    The operator pod will not start without it.
 

@@ -39,25 +39,38 @@ spec:
             spec:
               type: object
               required: [template]
+              # Beyond the fields documented below, any Deployment.spec field
+              # except replicas (autoscaler-owned) and selector
+              # (operator-owned) — minReadySeconds, progressDeadlineSeconds,
+              # ... — is accepted and passed through verbatim to the app's
+              # main Deployment. Unknown fields are not validated here; a
+              # bogus field surfaces as an apply error in the operator log.
+              x-kubernetes-preserve-unknown-fields: true
               properties:
                 appName:
                   type: string
                   description: >-
                     Conductor application name. Defaults to metadata.name.
+                maxOldVersionsReplicas:
+                  type: integer
+                  minimum: 0
+                  description: >-
+                    Total pod allowance shared by the old-version drain
+                    Deployments, spread equally (capped at each version's
+                    recommendation, leftovers waterfall), newest versions
+                    first when there are more versions than pods; versions
+                    that get 0 stay parked until slots free. Independent of
+                    the main Deployment's replicas and rollout surge. Unset
+                    means unbudgeted: each old version gets its full
+                    recommendation, floored at 1.
                 strategy:
                   description: >-
                     Update strategy for the app's main Deployment, exactly as
                     in Deployment.spec.strategy (type,
                     rollingUpdate.maxSurge, rollingUpdate.maxUnavailable) —
-                    passed through verbatim. Setting rollingUpdate.maxSurge
-                    additionally budgets the old-version drain Deployments:
-                    latest replicas + maxSurge is the app's total pod
-                    allowance, and old versions share whatever surge headroom
-                    the latest Deployment isn't using (equal split capped at
-                    each version's recommendation; newest versions first when
-                    there are more versions than pods, the rest parked at 0
-                    until slots free). Without maxSurge, old versions are
-                    sized to their own recommendation, uncapped.
+                    passed through verbatim. Old-version drain Deployments
+                    are unaffected; their sizing is governed solely by
+                    maxOldVersionsReplicas.
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
                 template:

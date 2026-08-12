@@ -44,15 +44,15 @@ func main() {
 	if err != nil {
 		fatal("load config: %v", err)
 	}
-	licenseKey, err := config.LoadLicenseKey()
+	apiKey, err := config.LoadAPIKey()
 	if err != nil {
-		fatal("load license key: %v", err)
+		fatal("load API key: %v", err)
 	}
 
 	conductorClient, err := conductor.New(conductor.Options{
 		Endpoint:           cfg.Conductor.Endpoint,
 		OrgName:            cfg.Conductor.OrgName,
-		Token:              licenseKey,
+		Token:              apiKey,
 		InsecureSkipVerify: cfg.Conductor.InsecureSkipVerify,
 	})
 	if err != nil {

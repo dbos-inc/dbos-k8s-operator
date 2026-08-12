@@ -120,34 +120,69 @@ func TestAppNameDefaultsToCRName(t *testing.T) {
 	}
 }
 
-// spec.strategy passes through verbatim to the main Deployment — same field
-// names as Deployment.spec.strategy — and its absence sets nothing.
-func TestSetStrategy(t *testing.T) {
+// Every CR spec field outside the denylist passes through verbatim to the
+// main Deployment; a CR authoring none of them sets nothing.
+func TestCopySpecFields(t *testing.T) {
 	cr := testCR()
 	d, _ := buildDeployment(cr)
-	if err := setStrategy(d, cr); err != nil {
-		t.Fatalf("setStrategy: %v", err)
+	if err := copySpecFields(d, cr); err != nil {
+		t.Fatalf("copySpecFields: %v", err)
 	}
-	if _, found, _ := unstructured.NestedFieldNoCopy(d, "spec", "strategy"); found {
-		t.Error("strategy set on the deployment with none authored")
+	for _, field := range []string{"strategy", "minReadySeconds", "progressDeadlineSeconds"} {
+		if _, found, _ := unstructured.NestedFieldNoCopy(d, "spec", field); found {
+			t.Errorf("spec.%s set on the deployment with none authored", field)
+		}
 	}
 
-	authored := map[string]any{
+	strategy := map[string]any{
 		"type": "RollingUpdate",
 		"rollingUpdate": map[string]any{
 			"maxSurge":       int64(2),
 			"maxUnavailable": "0%",
 		},
 	}
-	_ = unstructured.SetNestedMap(cr.Object, authored, "spec", "strategy")
+	_ = unstructured.SetNestedMap(cr.Object, strategy, "spec", "strategy")
+	_ = unstructured.SetNestedField(cr.Object, int64(30), "spec", "minReadySeconds")
 	d, _ = buildDeployment(cr)
-	if err := setStrategy(d, cr); err != nil {
-		t.Fatalf("setStrategy: %v", err)
+	if err := copySpecFields(d, cr); err != nil {
+		t.Fatalf("copySpecFields: %v", err)
 	}
 	surge, _, _ := unstructured.NestedInt64(d, "spec", "strategy", "rollingUpdate", "maxSurge")
 	unavailable, _, _ := unstructured.NestedString(d, "spec", "strategy", "rollingUpdate", "maxUnavailable")
 	kind, _, _ := unstructured.NestedString(d, "spec", "strategy", "type")
 	if kind != "RollingUpdate" || surge != 2 || unavailable != "0%" {
 		t.Errorf("strategy = type %q, maxSurge %d, maxUnavailable %q; want the authored values", kind, surge, unavailable)
+	}
+	if ready, _, _ := unstructured.NestedInt64(d, "spec", "minReadySeconds"); ready != 30 {
+		t.Errorf("minReadySeconds = %d, want 30", ready)
+	}
+}
+
+// Operator-owned fields and the DBOS extras never leak onto the Deployment,
+// even when authored in the CR.
+func TestCopySpecFieldsDenylist(t *testing.T) {
+	cr := testCR()
+	_ = unstructured.SetNestedField(cr.Object, "conductor-app", "spec", "appName")
+	_ = unstructured.SetNestedField(cr.Object, int64(4), "spec", "maxOldVersionsReplicas")
+	_ = unstructured.SetNestedField(cr.Object, int64(7), "spec", "replicas")
+	_ = unstructured.SetNestedMap(cr.Object, map[string]any{"matchLabels": map[string]any{"app": "hijacked"}}, "spec", "selector")
+
+	d, _ := buildDeployment(cr)
+	if err := copySpecFields(d, cr); err != nil {
+		t.Fatalf("copySpecFields: %v", err)
+	}
+	for _, field := range []string{"appName", "maxOldVersionsReplicas", "replicas"} {
+		if _, found, _ := unstructured.NestedFieldNoCopy(d, "spec", field); found {
+			t.Errorf("spec.%s leaked onto the deployment", field)
+		}
+	}
+	if sel, _, _ := unstructured.NestedString(d, "spec", "selector", "matchLabels", "app"); sel != "myapp" {
+		t.Errorf("selector app label = %q, want the operator-derived %q", sel, "myapp")
+	}
+	// template stays the label-injected copy from buildDeployment, not the
+	// raw CR template.
+	labels, _, _ := unstructured.NestedMap(d, "spec", "template", "metadata", "labels")
+	if labels["app"] != "myapp" {
+		t.Errorf("template labels = %v, want the injected app label kept", labels)
 	}
 }

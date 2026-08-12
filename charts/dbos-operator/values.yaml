@@ -30,10 +30,11 @@ config:
 # Used only when config.endpoint is empty.
 dbosDomain: cloud.dbos.dev
 
-# Secret holding the Conductor license key. Not created by the chart:
-#   kubectl create secret generic dbos-conductor-license-key --from-literal=token=<license key>
-conductorLicenseKey:
-  existingSecret: dbos-conductor-license-key
+# Secret holding the DBOS API key: the org-scoped Conductor credential the
+# operator authenticates with. Not created by the chart:
+#   kubectl create secret generic dbos-api-key --from-literal=token=<API key>
+apiKey:
+  existingSecret: dbos-api-key
   key: token
 
 replicas: 1
