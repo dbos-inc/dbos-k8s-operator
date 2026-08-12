@@ -1,7 +1,4 @@
 // Package conductor is a minimal bearer-JWT REST client for the Conductor API.
-// Only the one read path the operator needs is implemented: QueueAutoscale,
-// the queue-based-autoscaling recommendation Conductor computes from the
-// application's stored autoscaling policy (404 when none is installed).
 package conductor
 
 import (
@@ -18,35 +15,22 @@ import (
 	"time"
 )
 
-// ErrNoPolicy reports that Conductor answered the autoscale request with 404:
-// the application has no stored autoscaling policy (or does not exist), so
-// there is no recommendation to act on. A normal state, not a failure.
+// ErrNoPolicy reports a 404 — a normal state, not a failure.
 var ErrNoPolicy = errors.New("no autoscaling policy")
 
 const defaultDomain = "cloud.dbos.dev"
 
-// defaultCloudPathPrefix is the path prefix DBOS Cloud uses to route to
-// Conductor's REST API. Self-hosted deployments typically expose the API at
-// just /api, so users override Endpoint with the appropriate base URL.
 const defaultCloudPathPrefix = "/conductor/v1alpha1"
 
-// VersionRecommendation is one application version's entry in a
-// queue-based-autoscaling response.
 type VersionRecommendation struct {
 	ApplicationVersion string
 	IsLatest           bool
 	DesiredExecutors   int
-	ObservedAt         int64 // epoch ms the aggregate was computed, from the response
+	ObservedAt         int64 // epoch ms
 }
 
-// AutoscaleResult is a decoded queue-based-autoscaling response. Body is the
-// latest version's entry, raw JSON exactly as Conductor served it (camelCase
-// v2 form — KEDA's valueLocation must read "desiredExecutors"), so it can be
-// re-served verbatim to KEDA's metrics-api scaler, whose valueLocation reads
-// a single object; the parsed fields mirror that entry for logging and CR
-// status updates. OldVersions carries the remaining entries — older versions
-// that still hold work and need executors of their own — in Conductor's order
-// (most recently registered first).
+// Body is the latest version's entry verbatim, re-served as-is to KEDA;
+// OldVersions holds the remaining entries, most recently registered first.
 type AutoscaleResult struct {
 	Body               []byte
 	ApplicationVersion string
@@ -55,27 +39,17 @@ type AutoscaleResult struct {
 	OldVersions        []VersionRecommendation
 }
 
-// Options configures a Client.
 type Options struct {
-	// Endpoint is the full base URL up to (but not including) /v2. Optional;
-	// if empty, defaults to https://${DBOS_DOMAIN:-cloud.dbos.dev}/conductor/v1alpha1.
+	// Base URL up to (not including) /v2; empty derives it from DBOS_DOMAIN.
 	Endpoint string
 
-	// OrgName is required and is passed as the :orgName URL segment. The v2
-	// API addresses orgs by name (e.g. "local"), not by UUID.
-	OrgName string
+	OrgName string // required; org name, not UUID
+	Token   string // required; bearer JWT
 
-	// Token is the bearer JWT, required.
-	Token string
-
-	// InsecureSkipVerify disables TLS verification (dev only).
-	InsecureSkipVerify bool
-
-	// Timeout caps each HTTP request. Defaults to 10s.
-	Timeout time.Duration
+	InsecureSkipVerify bool          // dev only
+	Timeout            time.Duration // per-request cap, default 10s
 }
 
-// Client is safe for concurrent use.
 type Client struct {
 	baseURL string
 	orgName string
@@ -83,7 +57,6 @@ type Client struct {
 	http    *http.Client
 }
 
-// New constructs a client. Validates required fields and resolves the base URL.
 func New(opts Options) (*Client, error) {
 	if opts.OrgName == "" {
 		return nil, fmt.Errorf("orgName is required")
@@ -111,9 +84,6 @@ func New(opts Options) (*Client, error) {
 	}, nil
 }
 
-// resolveBaseURL turns the user-supplied Endpoint (which may be empty) into
-// the full base URL we prepend to every request. The result has no trailing
-// slash and contains everything up to but not including /v2.
 func resolveBaseURL(endpoint string) (string, error) {
 	if endpoint != "" {
 		if _, err := url.Parse(endpoint); err != nil {
@@ -132,22 +102,9 @@ func resolveBaseURL(endpoint string) (string, error) {
 	return domain + defaultCloudPathPrefix, nil
 }
 
-// QueueAutoscale asks Conductor how many executors the app needs right now.
-// The computation is driven entirely by the application's stored autoscaling
-// policy; returns ErrNoPolicy on 404 (no policy installed).
-//
-// Conductor answers with one entry per application version — the latest first,
-// then every older version still holding work; a version with no remaining
-// work at all is absent. The latest entry is re-served to KEDA, which scales
-// the app's main Deployment; the older entries are returned so the manager can
-// maintain (for now: report) per-version Deployments for them.
-//
-//	GET <base>/v2/orgs/<orgName>/apps/<app>/autoscale
-//	  → [{"applicationVersion": "...", "isLatest": true, "desiredExecutors": N, "observedAt": ms}, ...]
+// One entry per version still holding work, latest first; ErrNoPolicy on 404.
 func (c *Client) QueueAutoscale(ctx context.Context, app string) (*AutoscaleResult, error) {
 	path := fmt.Sprintf("/v2/orgs/%s/apps/%s/autoscale", url.PathEscape(c.orgName), url.PathEscape(app))
-	// Decoded twice: once to parse the entries, once to keep the latest
-	// entry's bytes intact for KEDA.
 	var entries []json.RawMessage
 	if _, err := c.do(ctx, http.MethodGet, path, nil, &entries); err != nil {
 		var he *HTTPError
@@ -171,8 +128,6 @@ func (c *Client) QueueAutoscale(ctx context.Context, app string) (*AutoscaleResu
 		if err := json.Unmarshal(raw, &e); err != nil {
 			return nil, fmt.Errorf("QueueAutoscale %s: decode entry: %w", app, err)
 		}
-		// The latest version leads the array; keying on the flag keeps this
-		// working if that ever stops holding.
 		if e.IsLatest && result.Body == nil {
 			result.Body = raw
 			result.ApplicationVersion = e.ApplicationVersion
@@ -193,7 +148,6 @@ func (c *Client) QueueAutoscale(ctx context.Context, app string) (*AutoscaleResu
 	return result, nil
 }
 
-// HTTPError is a non-2xx Conductor response.
 type HTTPError struct {
 	StatusCode int
 	Status     string
@@ -204,8 +158,6 @@ func (e *HTTPError) Error() string {
 	return e.Status + ": " + e.Body
 }
 
-// do performs one request and returns the raw response body (also decoding it
-// into out when out is non-nil).
 func (c *Client) do(ctx context.Context, method, path string, in any, out any) ([]byte, error) {
 	var body io.Reader
 	if in != nil {

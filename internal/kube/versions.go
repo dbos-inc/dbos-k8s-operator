@@ -1,27 +1,5 @@
-// Old-application-version handling. Conductor's autoscale response carries one
-// entry per version still holding work; workflows only finish on an executor of
-// their own version, so each old version needs its own Deployment while its
-// entry is present, and is torn down when the entry disappears.
-//
-// Presence, not size, is what decides existence: an entry with
-// desiredExecutors 0 still means unfinished work whose queue depth is 0 (a
-// PENDING workflow already dequeued, say), so its Deployment stays — at one
-// replica normally, possibly at zero under a drain budget. Only Conductor
-// dropping the version from the response — its signal that nothing is left to
-// run — deletes it.
-//
-// Sizing: unbudgeted by default (each version gets its full recommendation,
-// floored at 1). When the CR authors spec.maxOldVersionsReplicas, that number
-// is the total pod allowance old versions share, spread equally (capped at
-// each one's need, leftovers waterfall), newest versions first when there are
-// more versions than pods. Versions that get 0 stay present but parked, and
-// pick up freed slots as newer versions drain. The budget is independent of
-// the latest Deployment: its replicas and rollout surge are governed by
-// spec.strategy alone.
-//
-// Not yet handled: a deletion grace period and PodDisruptionBudgets, so a
-// version's last pods can be interrupted mid-workflow (the work is durable and
-// recovers, but on the next pod of that version).
+// One Deployment per old version still present in Conductor's autoscale
+// response; presence, not size, decides existence.
 package kube
 
 import (
@@ -33,7 +11,6 @@ import (
 	"fmt"
 	"maps"
 	"strings"
-	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -43,15 +20,8 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-// versionLabel marks a versioned Deployment's pods with the application
-// version they run, keeping its selector disjoint from the main (latest)
-// Deployment's plain app=<name> selector.
 const versionLabel = "dbos.dev/app-version"
 
-// sanitizeVersion lowercases an application version and collapses every
-// non-alphanumeric rune to '-', yielding a DNS-1123-safe token. Lossy by
-// nature: distinct versions can sanitize to the same string, which versionSlug
-// resolves.
 func sanitizeVersion(version string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(version) {
@@ -65,12 +35,7 @@ func sanitizeVersion(version string) string {
 	return strings.Trim(b.String(), "-")
 }
 
-// versionSlug is the token identifying one application version in a Deployment
-// name and in the version label: the sanitized version when that is lossless,
-// otherwise a truncated form plus a short hash of the original. Two distinct
-// versions must never share a slug — they would share a Deployment, and one
-// version's pods would run the other's code. Both forms stay within the 40
-// characters that keep names and label values comfortably in range.
+// Two distinct versions must never share a slug — they would share a Deployment.
 func versionSlug(version string) string {
 	if version == "" {
 		return "unversioned"
@@ -90,25 +55,12 @@ func versionSlug(version string) string {
 	return s + "-" + hash
 }
 
-// versionDeploymentName names an old version's Deployment. The latest version
-// keeps the bare CR name (KEDA's ScaledObject targets it by name); old
-// versions get a version-derived suffix.
+// The latest version keeps the bare CR name (KEDA targets it by name).
 func versionDeploymentName(app, version string) string {
 	return app + "-" + versionSlug(version)
 }
 
-// buildVersionDeployment derives the Deployment for one old application
-// version: the regular Deployment scaffolding around the version's template,
-// renamed, its selector and pod labels extended with the version label,
-// DBOS__APPVERSION pinned in every container so its pods register that
-// version, and — unlike the latest Deployment, whose replicas KEDA owns —
-// spec.replicas written directly, since old versions have no ScaledObject.
-//
-// template is the snapshot captured at the version's rollout; nil means no
-// snapshot exists (the version predates the operator or its snapshots) and
-// falls back to the CR's current template — pods then run the latest template
-// pinned to the old version string, which recovers the work but not
-// necessarily on the version's own image.
+// spec.replicas is written directly — old versions have no ScaledObject.
 func buildVersionDeployment(cr *unstructured.Unstructured, version string, replicas int, template map[string]any) (map[string]any, error) {
 	var deployment map[string]any
 	var err error
@@ -147,9 +99,6 @@ func buildVersionDeployment(cr *unstructured.Unstructured, version string, repli
 	return deployment, nil
 }
 
-// pinAppVersion sets DBOS__APPVERSION=<version> on every container, replacing
-// any value the CR author set: this Deployment exists to run exactly that
-// version.
 func pinAppVersion(deployment map[string]any, version string) error {
 	containers, ok, err := unstructured.NestedSlice(deployment, "spec", "template", "spec", "containers")
 	if err != nil || !ok {
@@ -177,12 +126,6 @@ func pinAppVersion(deployment map[string]any, version string) error {
 	return unstructured.SetNestedSlice(deployment, containers, "spec", "template", "spec", "containers")
 }
 
-// drainBudget returns the pod allowance old-version Deployments share, and
-// whether one applies at all: false when the CR authors no
-// spec.maxOldVersionsReplicas, in which case sizing is unbudgeted. The cap is
-// absolute — it does not flex with the latest Deployment's replicas or its
-// rollout surge, so the app's worst-case pod count is
-// latest replicas + rollout surge + maxOldVersionsReplicas.
 func drainBudget(cr *unstructured.Unstructured) (int, bool, error) {
 	raw, ok, err := unstructured.NestedFieldNoCopy(cr.Object, "spec", "maxOldVersionsReplicas")
 	if err != nil {
@@ -206,12 +149,6 @@ func drainBudget(cr *unstructured.Unstructured) (int, bool, error) {
 	return budget, true, nil
 }
 
-// allocateDrainBudget spreads budget pods across versions in order, one pod
-// per version per round, capped at each version's need: equal shares, with
-// leftovers flowing to the versions that can still use them. When there are
-// fewer pods than versions the earliest entries win one each — callers pass
-// versions newest-registered first, making that LIFO. Never exceeds a
-// version's need; a zero budget parks every version at zero.
 func allocateDrainBudget(needs []int, budget int) []int {
 	alloc := make([]int, len(needs))
 	for budget > 0 {
@@ -233,29 +170,8 @@ func allocateDrainBudget(needs []int, budget int) []int {
 	return alloc
 }
 
-// oldVersionStaleAfter bounds how old a poll result may be and still drive
-// versioned Deployments. Beyond it the response is no longer evidence of what
-// is running, and acting on it could delete a Deployment whose version has
-// since gone back to holding work. Mirrors the metrics endpoint's own cutoff.
-func (m *Manager) oldVersionStaleAfter() time.Duration {
-	return max(3*m.opts.PollInterval, 30*time.Second)
-}
-
-// reconcileOldVersions makes the cluster match the latest poll result's
-// non-latest entries: one Deployment per entry, sized to its recommendation
-// (at least 1) — clipped by the drain budget when the CR authors
-// spec.maxOldVersionsReplicas — and deletion of every versioned Deployment of
-// this app whose version has left the response.
-//
-// Deletion is driven by the *live* list of versioned Deployments rather than a
-// diff against the previous result, so a version that outlived an operator
-// restart is still cleaned up, and drift (a hand-created Deployment carrying
-// the labels) converges too.
-//
-// Three conditions leave the fleet untouched, all of them cases where the
-// response is not evidence about versions: no poll has succeeded yet, the app
-// has no autoscaling policy (Conductor reports nothing to act on), or the last
-// result is stale. Absence of data must never be read as "delete everything".
+// No poll yet, no policy, or a stale result leaves the fleet untouched —
+// absence of data must never be read as "delete everything".
 func (m *Manager) reconcileOldVersions(ctx context.Context, cr *unstructured.Unstructured, logger klog.Logger) error {
 	namespace, name := cr.GetNamespace(), cr.GetName()
 	key := namespace + "/" + name
@@ -264,9 +180,8 @@ func (m *Manager) reconcileOldVersions(ctx context.Context, cr *unstructured.Uns
 	if !ok || result.NoPolicy {
 		return nil
 	}
-	if age := time.Since(result.PolledAt); age > m.oldVersionStaleAfter() {
-		logger.V(2).Info("skipping old-version reconcile on a stale poll result",
-			"app", key, "age", age.Truncate(time.Second))
+	if result.Stale {
+		logger.V(2).Info("skipping old-version reconcile on a stale poll result", "app", key)
 		return nil
 	}
 
@@ -275,18 +190,13 @@ func (m *Manager) reconcileOldVersions(ctx context.Context, cr *unstructured.Uns
 		return err
 	}
 
-	// A present version needs at least one executor even at desired 0: work
-	// that adds no queue depth (a PENDING workflow already dequeued, say)
-	// still needs a pod of its version to finish or recover it.
 	needs := make([]int, len(result.OldVersions))
 	for i, v := range result.OldVersions {
-		needs[i] = max(v.DesiredExecutors, 1)
+		needs[i] = max(v.DesiredExecutors, 0)
 	}
 	allocs := needs
 	if budgeted {
-		// OldVersions arrives newest-registered first, so allocation order is
-		// already LIFO: with the budget short, the newest versions win and the
-		// oldest wait parked at zero replicas until slots free up.
+		// OldVersions arrives newest-registered first: when short, newest win.
 		allocs = allocateDrainBudget(needs, budget)
 	}
 
@@ -313,12 +223,17 @@ func (m *Manager) reconcileOldVersions(ctx context.Context, cr *unstructured.Uns
 			continue
 		}
 		if changed {
-			if replicas == 0 {
+			switch {
+			case replicas == 0 && v.DesiredExecutors <= 0:
+				logger.Info("old version capped to zero by the Conductor rollout policy; deployment parked at zero replicas",
+					"app", key, "version", v.ApplicationVersion,
+					"deployment", versionDeploymentName(name, v.ApplicationVersion))
+			case replicas == 0:
 				logger.Info("old version queued: drain budget exhausted; deployment parked at zero replicas",
 					"app", key, "version", v.ApplicationVersion,
 					"desiredExecutors", v.DesiredExecutors, "budget", budget,
 					"deployment", versionDeploymentName(name, v.ApplicationVersion))
-			} else {
+			default:
 				logger.Info("old version holds work; deployment applied",
 					"app", key, "version", v.ApplicationVersion,
 					"desiredExecutors", v.DesiredExecutors, "replicas", replicas,
@@ -331,8 +246,6 @@ func (m *Manager) reconcileOldVersions(ctx context.Context, cr *unstructured.Uns
 		errs = append(errs, err)
 	}
 	if len(errs) > 0 {
-		// The plan was recorded optimistically for log dedupe; drop it so a
-		// failed pass reports again rather than going quiet until counts move.
 		m.mu.Lock()
 		delete(m.lastOldVersions, key)
 		m.mu.Unlock()
@@ -341,10 +254,6 @@ func (m *Manager) reconcileOldVersions(ctx context.Context, cr *unstructured.Uns
 	return nil
 }
 
-// applyVersionDeployment server-side-applies one old version's Deployment,
-// built from the version's template snapshot when one exists. Unlike the main
-// Deployment, spec.replicas is part of the applied manifest: old versions have
-// no ScaledObject, so the operator owns their size.
 func (m *Manager) applyVersionDeployment(ctx context.Context, cr *unstructured.Unstructured, version string, replicas int) error {
 	template, _, err := m.snapshotTemplate(ctx, cr, version)
 	if err != nil {
@@ -367,11 +276,6 @@ func (m *Manager) applyVersionDeployment(ctx context.Context, cr *unstructured.U
 	return nil
 }
 
-// deleteDepartedVersions removes this app's versioned Deployments whose slug is
-// not in keep. The label selector scopes the list to Deployments this operator
-// created for this app — the main Deployment carries no version label, so it
-// can never match — and the owner reference is checked as well, so a
-// same-named resource belonging to something else is left alone.
 func (m *Manager) deleteDepartedVersions(ctx context.Context, cr *unstructured.Unstructured, keep map[string]bool, logger klog.Logger) error {
 	selector := fmt.Sprintf("app=%s,app.kubernetes.io/managed-by=%s,%s",
 		cr.GetName(), fieldManager, versionLabel)
@@ -405,7 +309,6 @@ func (m *Manager) deleteDepartedVersions(ctx context.Context, cr *unstructured.U
 	return errors.Join(errs...)
 }
 
-// ownedBy reports whether obj carries a controller owner reference to cr.
 func ownedBy(obj *unstructured.Unstructured, cr *unstructured.Unstructured) bool {
 	for _, ref := range obj.GetOwnerReferences() {
 		if ref.Kind == "DBOSApplication" && ref.Name == cr.GetName() && ref.UID == cr.GetUID() {

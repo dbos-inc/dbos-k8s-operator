@@ -1,9 +1,5 @@
-// Command operator runs the DBOS operator: a single binary that owns each
-// DBOSApplication's Deployment (reconciled from the CR via server-side apply),
-// polls Conductor for the desired executor count implied by the app's stored
-// autoscaling policy, and serves that count over plain HTTP for KEDA's
-// metrics-api scaler. There is no controller-runtime and no leader election;
-// state is a CR list re-read every reconcile interval.
+// Command operator reconciles DBOSApplication Deployments, polls Conductor for
+// desired executor counts, and serves them over HTTP for KEDA.
 package main
 
 import (
@@ -82,7 +78,6 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	// Start the background manager that reconciles CRs and polls Conductor for the desired executor count.
 	manager := kube.NewManager(kube.Options{
 		Client:            dynClient,
 		Conductor:         conductorClient,
@@ -98,7 +93,6 @@ func main() {
 		manager.Run(ctx)
 	}()
 
-	// Start the HTTP server that serves the desired executor count for KEDA's metrics API.
 	server := &http.Server{
 		Addr:              cfg.HTTP.Listen,
 		Handler:           metricshttp.NewServer(s).Handler(),
@@ -122,8 +116,6 @@ func main() {
 	klog.InfoS("operator shutdown complete")
 }
 
-// loadRESTConfig prefers in-cluster config and falls back to the given (or
-// default) kubeconfig for local development.
 func loadRESTConfig(kubeconfig string) (*rest.Config, error) {
 	if kubeconfig == "" {
 		if cfg, err := rest.InClusterConfig(); err == nil {

@@ -13,7 +13,6 @@ import (
 	"github.com/dbos-inc/dbos-k8s-operator/internal/conductor"
 )
 
-// crHash hashes the fixture CR's authored template, the way reconcile does.
 func crHash(t *testing.T, cr *unstructured.Unstructured) string {
 	t.Helper()
 	template, _, _ := unstructured.NestedMap(cr.Object, "spec", "template")
@@ -24,8 +23,6 @@ func crHash(t *testing.T, cr *unstructured.Unstructured) string {
 	return hash
 }
 
-// appVersionOf pulls DBOS__APPVERSION out of an applied manifest's first
-// container. "" when absent.
 func appVersionOf(t *testing.T, manifest map[string]any) string {
 	t.Helper()
 	containers, _, _ := unstructured.NestedSlice(manifest, "spec", "template", "spec", "containers")
@@ -42,8 +39,6 @@ func appVersionOf(t *testing.T, manifest map[string]any) string {
 	return ""
 }
 
-// mainDeployment is the app's live main Deployment as a previous reconcile
-// would have left it: the seeded version env var on its container.
 func mainDeployment(version string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "apps/v1",
@@ -58,7 +53,6 @@ func mainDeployment(version string) *unstructured.Unstructured {
 	}}
 }
 
-// snapshotFor is a template snapshot as ensureSnapshot would have stored it.
 func snapshotFor(name, hash string, template map[string]any) *unstructured.Unstructured {
 	s := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "apps/v1",
@@ -107,8 +101,6 @@ func TestSeededVersionRoundTrip(t *testing.T) {
 	if !ok || hash != "9f2c41ab8de3" {
 		t.Errorf("parseSeededVersion(%q) = %q, %v", version, hash, ok)
 	}
-	// The 32-char lowercase form must survive slugging losslessly: version
-	// strings become label values and Deployment name suffixes verbatim.
 	if got := versionSlug(version); got != version {
 		t.Errorf("versionSlug(%q) = %q, want identity", version, got)
 	}
@@ -119,9 +111,6 @@ func TestSeededVersionRoundTrip(t *testing.T) {
 	}
 }
 
-// A fresh app gets a minted <ns>-<hash> version injected into its main
-// Deployment, and the authored template — no injected labels, no seeded env —
-// is captured as a snapshot before the apply.
 func TestReconcileDeploymentSeedsAndSnapshots(t *testing.T) {
 	f := newVersionFixture(t, result(time.Now()))
 	if err := f.manager.reconcileDeployment(context.Background(), f.cr, klog.Background()); err != nil {
@@ -152,8 +141,6 @@ func TestReconcileDeploymentSeedsAndSnapshots(t *testing.T) {
 	}
 }
 
-// While the template is unchanged, the live Deployment's version string is
-// reused verbatim: reconcile passes and operator restarts mint nothing.
 func TestReconcileDeploymentReusesLiveVersion(t *testing.T) {
 	current := "1754300000000123456-"
 	f := newVersionFixture(t, result(time.Now()))
@@ -167,8 +154,6 @@ func TestReconcileDeploymentReusesLiveVersion(t *testing.T) {
 	}
 }
 
-// A changed template mints a new version — and so does a rollback, whose new
-// version shares the old one's hash and therefore its existing snapshot.
 func TestReconcileDeploymentMintsOnTemplateChange(t *testing.T) {
 	stale := "1754300000000123456-aaaaaaaaaaaa" // hash of a template long gone
 	f := newVersionFixture(t, result(time.Now()), mainDeployment(stale))
@@ -184,8 +169,6 @@ func TestReconcileDeploymentMintsOnTemplateChange(t *testing.T) {
 	}
 }
 
-// An authored DBOS__APPVERSION wins: nothing is injected over it, and the
-// snapshot is keyed by the authored version's slug.
 func TestReconcileDeploymentRespectsAuthoredPin(t *testing.T) {
 	f := newVersionFixture(t, result(time.Now()))
 	container := map[string]any{
@@ -205,8 +188,6 @@ func TestReconcileDeploymentRespectsAuthoredPin(t *testing.T) {
 	}
 }
 
-// An old version scales up from its snapshot's template, not the CR's current
-// one; a version with no snapshot falls back to the CR template.
 func TestApplyVersionDeploymentUsesSnapshot(t *testing.T) {
 	oldVersion := "1754300000000123456-aaaaaaaaaaaa"
 	orphan := "1754300000000123457-bbbbbbbbbbbb"
@@ -237,9 +218,6 @@ func TestApplyVersionDeploymentUsesSnapshot(t *testing.T) {
 	}
 }
 
-// Snapshot conflicts: a seeded version naming different template bytes is a
-// bug and must fail loudly; an authored version reused across template changes
-// is replaced, latest wins.
 func TestEnsureSnapshotConflicts(t *testing.T) {
 	template := map[string]any{"spec": map[string]any{
 		"containers": []any{map[string]any{"name": "app", "image": "img:v2"}},
@@ -271,7 +249,6 @@ func TestEnsureSnapshotConflicts(t *testing.T) {
 		t.Errorf("replaced snapshot hash = %q, want %q", got, hash)
 	}
 
-	// Idempotent when the stored template already matches.
 	if err := f.manager.ensureSnapshot(context.Background(), f.cr, "authored-v7", hash, template, klog.Background()); err != nil {
 		t.Errorf("matching snapshot must be a no-op, got %v", err)
 	}

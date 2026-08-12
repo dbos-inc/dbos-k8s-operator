@@ -1,7 +1,4 @@
-// Package config loads the operator's static configuration from a YAML file
-// (typically mounted from a ConfigMap) and validates it. Apps are not listed
-// here — they are DBOSApplication custom resources discovered at runtime.
-// ConfigMap changes take effect on pod restart.
+// Package config loads and validates the operator's static YAML configuration.
 package config
 
 import (
@@ -15,12 +12,9 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// Duration wraps time.Duration so YAML/JSON values like "1s" / "30s" decode
-// correctly. time.Duration's default UnmarshalJSON expects a nanosecond int.
+// Duration wraps time.Duration so values like "30s" decode correctly.
 type Duration time.Duration
 
-// UnmarshalJSON accepts either a quoted duration string ("1s") or a numeric
-// nanosecond value. Strings are parsed via time.ParseDuration.
 func (d *Duration) UnmarshalJSON(b []byte) error {
 	var s string
 	if err := json.Unmarshal(b, &s); err == nil {
@@ -48,61 +42,34 @@ type Config struct {
 	Kubernetes Kubernetes `json:"kubernetes,omitempty"`
 }
 
-// Conductor describes the Conductor instance the operator polls.
 type Conductor struct {
-	// Endpoint is the full base URL of the Conductor HTTP API up through and
-	// including any cloud-specific path prefix (e.g. /conductor/v1alpha1).
-	// Optional; when empty the operator derives it from the DBOS_DOMAIN env
-	// var as https://${DBOS_DOMAIN}/conductor/v1alpha1.
+	// Full base URL; empty derives https://${DBOS_DOMAIN}/conductor/v1alpha1.
 	Endpoint string `json:"endpoint,omitempty"`
 
-	// OrgName is the Conductor organization, passed as the :org_id URL segment.
 	OrgName string `json:"orgName"`
 
-	// InsecureSkipVerify disables TLS verification of the Conductor endpoint.
-	// Only for local/dev clusters.
-	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
+	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"` // dev only
 }
 
-// APIKeyEnvVar is the environment variable from which LoadAPIKey reads the
-// DBOS API key — the org-scoped Conductor credential the operator uses as
-// bearer token, with permissions across the org's applications. Populated in
-// the Deployment from a Secret via env.valueFrom.secretKeyRef.
 const APIKeyEnvVar = "DBOS_API_KEY"
 
-// Poller controls the per-app autoscale poll cadence.
 type Poller struct {
-	// Interval is the steady-state poll cadence (default 30s, matching KEDA's
-	// default polling frequency — polling much faster than the consumer reads
-	// only loads Conductor for nothing).
-	Interval Duration `json:"interval,omitempty"`
+	Interval Duration `json:"interval,omitempty"` // default 30s, matching KEDA's
 
-	// MaxBackoff caps the per-app interval after consecutive failed ticks
-	// (default: interval, but at least 30s). The operator doubles the interval
-	// on each failed tick (with ±10% jitter) up to this cap; resets to
-	// Interval on success.
 	MaxBackoff Duration `json:"maxBackoff,omitempty"`
 }
 
-// HTTP configures the plain-HTTP metrics endpoint KEDA polls.
 type HTTP struct {
-	// Listen is the address of the metrics endpoint (default ":8080").
-	Listen string `json:"listen,omitempty"`
+	Listen string `json:"listen,omitempty"` // default ":8080"
 }
 
-// Kubernetes configures CR discovery and Deployment reconciliation.
 type Kubernetes struct {
-	// Namespace limits which DBOSApplications are reconciled; empty means all
-	// namespaces (requires cluster-scoped RBAC).
+	// Empty means all namespaces (requires cluster-scoped RBAC).
 	Namespace string `json:"namespace,omitempty"`
 
-	// ReconcileInterval is how often CRs are re-listed and Deployments
-	// re-applied (default 10s).
-	ReconcileInterval Duration `json:"reconcileInterval,omitempty"`
+	ReconcileInterval Duration `json:"reconcileInterval,omitempty"` // default 10s
 }
 
-// Load reads and validates the operator config from path. Defaults are
-// applied for omitted optional fields.
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -119,9 +86,6 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// LoadAPIKey reads the DBOS API key from the DBOS_API_KEY environment
-// variable and returns its trimmed contents. Called separately from Load so
-// the key source can change independently of the YAML config.
 func LoadAPIKey() (string, error) {
 	tok := strings.TrimSpace(os.Getenv(APIKeyEnvVar))
 	if tok == "" {
@@ -134,8 +98,6 @@ func (c *Config) applyDefaults() {
 	if c.Poller.Interval == 0 {
 		c.Poller.Interval = Duration(30 * time.Second)
 	}
-	// The derived defaults below scale with the interval so that an explicit
-	// interval alone always yields a valid, sensible config.
 	if c.Poller.MaxBackoff == 0 {
 		c.Poller.MaxBackoff = max(c.Poller.Interval, Duration(30*time.Second))
 	}

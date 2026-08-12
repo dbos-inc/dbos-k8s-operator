@@ -1,13 +1,10 @@
-// Package metricshttp serves the operator's poll results over plain HTTP for
-// KEDA's metrics-api scaler. The response is Conductor's queue-based
-// autoscaling JSON verbatim (snake_case), so a ScaledObject that used to
-// point at Conductor keeps its valueLocation (desiredExecutors) and only
-// changes its url. Authorization headers are accepted and ignored — the
-// endpoint is in-cluster and read-only.
+// Package metricshttp serves the poll results over plain HTTP for KEDA's
+// metrics-api scaler.
 package metricshttp
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -17,12 +14,9 @@ import (
 	"github.com/dbos-inc/dbos-k8s-operator/internal/store"
 )
 
-// Server serves GET /apps/{app}/autoscale and GET /healthz.
-//
-// The latest in-memory reading is served however old it is: the endpoint has
-// no staleness cutoff. A failing poller therefore holds the last known
-// recommendation rather than answering 503; X-DBOS-Polled-At carries the age
-// so a consumer that cares can decide for itself.
+// A result the poller marked stale is answered with 503 instead of served:
+// KEDA propagates no metric on scaler error, so the HPA holds the current
+// replica count rather than acting on stale data.
 type Server struct {
 	store store.Store
 }
@@ -47,9 +41,13 @@ func (s *Server) serveApp(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusServiceUnavailable, "no successful poll for app "+app)
 		return
 	}
+	if result.Stale {
+		errJSON(w, http.StatusServiceUnavailable, fmt.Sprintf(
+			"conductor unreachable for app %s; last successful poll at %s",
+			app, result.PolledAt.UTC().Format(time.RFC3339)))
+		return
+	}
 	if result.NoPolicy {
-		// Mirror Conductor's 404: no policy, no recommendation. KEDA's scaler
-		// errors out and the HPA holds the current replica count.
 		errJSON(w, http.StatusNotFound, "no autoscaling policy installed for app "+app)
 		return
 	}

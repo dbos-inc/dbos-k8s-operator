@@ -42,7 +42,6 @@ func TestBuildDeployment(t *testing.T) {
 		t.Errorf("namespace = %q", got)
 	}
 
-	// Selector and template labels must agree, with CR labels preserved.
 	sel, _, _ := unstructured.NestedString(d, "spec", "selector", "matchLabels", "app")
 	if sel != "myapp" {
 		t.Errorf("selector app label = %q", sel)
@@ -52,19 +51,15 @@ func TestBuildDeployment(t *testing.T) {
 		t.Errorf("template labels = %v", tmplLabels)
 	}
 
-	// replicas must not be applied: the autoscaler owns that field.
 	if _, found, _ := unstructured.NestedFieldNoCopy(d, "spec", "replicas"); found {
 		t.Error("spec.replicas must not be set by the operator")
 	}
 
-	// Owner reference enables GC of the Deployment when the CR goes away.
 	refs := u.GetOwnerReferences()
 	if len(refs) != 1 || refs[0].Kind != "DBOSApplication" || string(refs[0].UID) != "uid-123" || refs[0].Controller == nil || !*refs[0].Controller {
 		t.Errorf("ownerReferences = %+v", refs)
 	}
 
-	// The pod spec passes through untouched — version seeding happens in
-	// reconcileDeployment, not here.
 	containers, _, _ := unstructured.NestedSlice(d, "spec", "template", "spec", "containers")
 	if len(containers) != 1 {
 		t.Fatalf("containers = %+v", containers)
@@ -74,7 +69,6 @@ func TestBuildDeployment(t *testing.T) {
 	}
 }
 
-// The CR's own env is carried through as authored.
 func TestBuildDeploymentKeepsAuthoredEnv(t *testing.T) {
 	cr := testCR()
 	container := map[string]any{
@@ -120,8 +114,6 @@ func TestAppNameDefaultsToCRName(t *testing.T) {
 	}
 }
 
-// Every CR spec field outside the denylist passes through verbatim to the
-// main Deployment; a CR authoring none of them sets nothing.
 func TestCopySpecFields(t *testing.T) {
 	cr := testCR()
 	d, _ := buildDeployment(cr)
@@ -158,8 +150,6 @@ func TestCopySpecFields(t *testing.T) {
 	}
 }
 
-// Operator-owned fields and the DBOS extras never leak onto the Deployment,
-// even when authored in the CR.
 func TestCopySpecFieldsDenylist(t *testing.T) {
 	cr := testCR()
 	_ = unstructured.SetNestedField(cr.Object, "conductor-app", "spec", "appName")
@@ -179,8 +169,6 @@ func TestCopySpecFieldsDenylist(t *testing.T) {
 	if sel, _, _ := unstructured.NestedString(d, "spec", "selector", "matchLabels", "app"); sel != "myapp" {
 		t.Errorf("selector app label = %q, want the operator-derived %q", sel, "myapp")
 	}
-	// template stays the label-injected copy from buildDeployment, not the
-	// raw CR template.
 	labels, _, _ := unstructured.NestedMap(d, "spec", "template", "metadata", "labels")
 	if labels["app"] != "myapp" {
 		t.Errorf("template labels = %v, want the injected app label kept", labels)

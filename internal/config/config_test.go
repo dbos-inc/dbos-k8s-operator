@@ -38,8 +38,6 @@ conductor:
 	}
 }
 
-// The maxBackoff default derives from the configured interval (floored at
-// 30s), so setting only the interval yields a valid config at any cadence.
 func TestLoadDerivedDefaults(t *testing.T) {
 	cases := []struct {
 		interval    string

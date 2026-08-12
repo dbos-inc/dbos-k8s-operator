@@ -29,6 +29,16 @@ func TestInMemory(t *testing.T) {
 		t.Fatalf("Apps = %v", apps)
 	}
 
+	s.MarkStale("a")
+	if got, _ := s.Get("a"); !got.Stale || got.DesiredExecutors != 7 {
+		t.Fatalf("MarkStale = %+v, want Stale with the entry intact", got)
+	}
+	s.Set("a", Result{DesiredExecutors: 8})
+	if got, _ := s.Get("a"); got.Stale {
+		t.Fatal("Set did not clear Stale")
+	}
+	s.MarkStale("ghost") // no-op
+
 	s.Delete("a")
 	if _, ok := s.Get("a"); ok {
 		t.Fatal("Delete left the entry")

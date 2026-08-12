@@ -61,8 +61,10 @@ spec:
                     first when there are more versions than pods; versions
                     that get 0 stay parked until slots free. Independent of
                     the main Deployment's replicas and rollout surge. Unset
-                    means unbudgeted: each old version gets its full
-                    recommendation, floored at 1.
+                    means unbudgeted: each old version gets its recommendation
+                    verbatim — at least 1 unless the Conductor policy's
+                    rollout cap says less (a cap of 0 parks the version at
+                    zero replicas until it drains).
                 strategy:
                   description: >-
                     Update strategy for the app's main Deployment, exactly as

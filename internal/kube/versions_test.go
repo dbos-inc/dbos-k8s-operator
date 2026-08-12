@@ -9,7 +9,6 @@ import (
 )
 
 func TestVersionSlug(t *testing.T) {
-	// Versions that are already DNS-1123-safe slug to themselves.
 	for _, tc := range []struct{ in, want string }{
 		{"rollout-1754321098", "rollout-1754321098"},
 		{"9a3f0c", "9a3f0c"},
@@ -20,8 +19,6 @@ func TestVersionSlug(t *testing.T) {
 		}
 	}
 
-	// Lossy ones — characters replaced or length truncated — keep a readable
-	// prefix and gain a hash, and stay inside the 40-char budget.
 	for _, in := range []string{"V1.2.3+Build", "___", strings.Repeat("ab", 32)} {
 		got := versionSlug(in)
 		if len(got) > 40 {
@@ -32,8 +29,6 @@ func TestVersionSlug(t *testing.T) {
 		}
 	}
 
-	// Distinct versions must never share a slug: they would share a
-	// Deployment, and one version's pods would run the other's code.
 	if a, b := versionSlug("v1.0"), versionSlug("v1+0"); a == b {
 		t.Errorf("versionSlug collision: %q and %q both slug to %q", "v1.0", "v1+0", a)
 	}
@@ -45,7 +40,6 @@ func TestVersionSlug(t *testing.T) {
 
 func TestBuildVersionDeployment(t *testing.T) {
 	cr := testCR()
-	// An authored DBOS__APPVERSION must be replaced with the pinned version.
 	container := map[string]any{
 		"name":  "app",
 		"image": "img:v1",
@@ -66,14 +60,11 @@ func TestBuildVersionDeployment(t *testing.T) {
 		t.Errorf("name = %q, want myapp-v1", got)
 	}
 
-	// Old versions have no ScaledObject, so the operator owns replicas.
 	replicas, found, _ := unstructured.NestedInt64(d, "spec", "replicas")
 	if !found || replicas != 3 {
 		t.Errorf("spec.replicas = %d (found=%v), want 3", replicas, found)
 	}
 
-	// The version label keeps the selector disjoint from the latest
-	// Deployment's plain app=<name> selector, on all three label sets.
 	for _, path := range [][]string{
 		{"metadata", "labels"},
 		{"spec", "selector", "matchLabels"},
@@ -105,16 +96,12 @@ func TestBuildVersionDeployment(t *testing.T) {
 		t.Error("authored env dropped from the versioned deployment")
 	}
 
-	// Owner reference is preserved so a deleted CR sweeps versioned
-	// deployments too.
 	refs := u.GetOwnerReferences()
 	if len(refs) != 1 || refs[0].Kind != "DBOSApplication" {
 		t.Errorf("ownerReferences = %+v", refs)
 	}
 }
 
-// An authored CR strategy must never leak into a versioned Deployment: drain
-// replica counts are exact budget allocations, not a license to surge.
 func TestBuildVersionDeploymentCarriesNoStrategy(t *testing.T) {
 	cr := testCR()
 	_ = unstructured.SetNestedField(cr.Object, "2", "spec", "strategy", "rollingUpdate", "maxSurge")
@@ -134,9 +121,7 @@ func TestAllocateDrainBudget(t *testing.T) {
 		budget int
 		want   []int
 	}{
-		// Equal shares, capped at each version's need, leftovers waterfall.
 		{"waterfall", []int{8, 2, 1}, 6, []int{3, 2, 1}},
-		// Fewer pods than versions: earliest (newest) entries win one each.
 		{"lifo", []int{1, 1, 1}, 2, []int{1, 1, 0}},
 		{"zero budget parks everything", []int{5, 5}, 0, []int{0, 0}},
 		{"ample budget never exceeds needs", []int{2, 3}, 99, []int{2, 3}},
