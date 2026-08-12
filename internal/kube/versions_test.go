@@ -1,7 +1,6 @@
 package kube
 
 import (
-	"slices"
 	"strings"
 	"testing"
 
@@ -116,23 +115,3 @@ func TestBuildVersionDeploymentCarriesNoStrategy(t *testing.T) {
 	}
 }
 
-func TestAllocateDrainBudget(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		needs  []int
-		budget int
-		want   []int
-	}{
-		{"waterfall", []int{8, 2, 1}, 6, []int{3, 2, 1}},
-		{"lifo", []int{1, 1, 1}, 2, []int{1, 1, 0}},
-		{"zero budget parks everything", []int{5, 5}, 0, []int{0, 0}},
-		{"ample budget never exceeds needs", []int{2, 3}, 99, []int{2, 3}},
-		{"no versions", []int{}, 5, []int{}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := allocateDrainBudget(tc.needs, tc.budget); !slices.Equal(got, tc.want) {
-				t.Errorf("allocateDrainBudget(%v, %d) = %v, want %v", tc.needs, tc.budget, got, tc.want)
-			}
-		})
-	}
-}

@@ -52,20 +52,6 @@ spec:
                   type: string
                   description: >-
                     Conductor application name. Defaults to metadata.name.
-                maxOldVersionsReplicas:
-                  type: integer
-                  minimum: 0
-                  description: >-
-                    Total pod allowance shared by the old-version drain
-                    Deployments, spread equally (capped at each version's
-                    recommendation, leftovers waterfall), newest versions
-                    first when there are more versions than pods; versions
-                    that get 0 stay parked until slots free. Independent of
-                    the main Deployment's replicas and rollout surge. Unset
-                    means unbudgeted: each old version gets its recommendation
-                    verbatim — at least 1 unless the Conductor policy's
-                    rollout cap says less (a cap of 0 parks the version at
-                    zero replicas until it drains).
                 template:
                   description: >-
                     Pod template for the app, exactly as in

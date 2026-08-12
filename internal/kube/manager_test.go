@@ -153,7 +153,6 @@ func TestCopySpecFields(t *testing.T) {
 func TestCopySpecFieldsDenylist(t *testing.T) {
 	cr := testCR()
 	_ = unstructured.SetNestedField(cr.Object, "conductor-app", "spec", "appName")
-	_ = unstructured.SetNestedField(cr.Object, int64(4), "spec", "maxOldVersionsReplicas")
 	_ = unstructured.SetNestedField(cr.Object, int64(7), "spec", "replicas")
 	_ = unstructured.SetNestedMap(cr.Object, map[string]any{"matchLabels": map[string]any{"app": "hijacked"}}, "spec", "selector")
 
@@ -161,7 +160,7 @@ func TestCopySpecFieldsDenylist(t *testing.T) {
 	if err := copySpecFields(d, cr); err != nil {
 		t.Fatalf("copySpecFields: %v", err)
 	}
-	for _, field := range []string{"appName", "maxOldVersionsReplicas", "replicas"} {
+	for _, field := range []string{"appName", "replicas"} {
 		if _, found, _ := unstructured.NestedFieldNoCopy(d, "spec", field); found {
 			t.Errorf("spec.%s leaked onto the deployment", field)
 		}

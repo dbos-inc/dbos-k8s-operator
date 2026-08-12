@@ -74,9 +74,9 @@ func authoredAppVersion(template map[string]any) (string, bool) {
 	return "", false
 }
 
-// The live seeded version is reused while its hash matches — a reconcile
-// pass or restart must never mint a phantom rollout.
+// The live seeded version is reused while its hash matches.
 func (m *Manager) resolveAppVersion(ctx context.Context, cr *unstructured.Unstructured, template map[string]any, logger klog.Logger) (version, hash string, err error) {
+	// Fail loudly if the CR comes with a DBOS__APPVERSION. The operator owns it.
 	if _, ok := authoredAppVersion(template); ok {
 		return "", "", fmt.Errorf("%s is operator-owned; remove it from spec.template", appVersionEnv)
 	}
@@ -84,11 +84,12 @@ func (m *Manager) resolveAppVersion(ctx context.Context, cr *unstructured.Unstru
 	if err != nil {
 		return "", "", err
 	}
+	// Reuse the live seeded version if its hash matches the current template.
+	// live should be empty if the deployment doesn't exist yet, or if it was adopted and rolled back to a non-seeded version.
 	live, err := m.liveAppVersion(ctx, cr)
 	if err != nil {
 		return "", "", err
 	}
-	// Reuse the live seeded version if its hash matches the current template.
 	if h, ok := parseSeededVersion(live); ok && h == hash {
 		return live, hash, nil
 	}
@@ -152,6 +153,7 @@ func (m *Manager) ensureSnapshot(ctx context.Context, cr *unstructured.Unstructu
 		return fmt.Errorf("create template snapshot %q: %w", name, err)
 	}
 
+	// Snapshot already exists; check that it matches the current template.
 	existing, err := revisions.Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Errorf("get template snapshot %q: %w", name, err)

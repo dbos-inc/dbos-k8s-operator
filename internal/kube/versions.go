@@ -1,5 +1,4 @@
-// One Deployment per old version still present in Conductor's autoscale
-// response; presence, not size, decides existence.
+// One Deployment per old version still present in Conductor's autoscale response
 package kube
 
 import (
@@ -9,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -120,55 +118,10 @@ func pinAppVersion(deployment map[string]any, version string) error {
 	return unstructured.SetNestedSlice(deployment, containers, "spec", "template", "spec", "containers")
 }
 
-func drainBudget(cr *unstructured.Unstructured) (int, bool, error) {
-	raw, ok, err := unstructured.NestedFieldNoCopy(cr.Object, "spec", "maxOldVersionsReplicas")
-	if err != nil {
-		return 0, false, fmt.Errorf("spec.maxOldVersionsReplicas: %v", err)
-	}
-	if !ok {
-		return 0, false, nil
-	}
-	var budget int
-	switch v := raw.(type) {
-	case int64:
-		budget = int(v)
-	case float64:
-		budget = int(v)
-	default:
-		return 0, false, fmt.Errorf("spec.maxOldVersionsReplicas: unsupported type %T", raw)
-	}
-	if budget < 0 {
-		return 0, false, fmt.Errorf("spec.maxOldVersionsReplicas: negative value %d", budget)
-	}
-	return budget, true, nil
-}
-
-func allocateDrainBudget(needs []int, budget int) []int {
-	alloc := make([]int, len(needs))
-	for budget > 0 {
-		progressed := false
-		for i, need := range needs {
-			if budget == 0 {
-				break
-			}
-			if alloc[i] < need {
-				alloc[i]++
-				budget--
-				progressed = true
-			}
-		}
-		if !progressed {
-			break
-		}
-	}
-	return alloc
-}
-
 // No poll yet, no policy, or a stale result leaves the fleet untouched —
 // absence of data must never be read as "delete everything".
 func (m *Manager) reconcileOldVersions(ctx context.Context, cr *unstructured.Unstructured, logger klog.Logger) error {
-	namespace, name := cr.GetNamespace(), cr.GetName()
-	key := namespace + "/" + name
+	key := cr.GetNamespace() + "/" + cr.GetName()
 
 	result, ok := m.opts.Store.Get(appName(cr))
 	if !ok || result.NoPolicy {
@@ -179,73 +132,24 @@ func (m *Manager) reconcileOldVersions(ctx context.Context, cr *unstructured.Uns
 		return nil
 	}
 
-	budget, budgeted, err := drainBudget(cr)
-	if err != nil {
-		return err
-	}
-
-	needs := make([]int, len(result.OldVersions))
-	for i, v := range result.OldVersions {
-		needs[i] = max(v.DesiredExecutors, 0)
-	}
-	allocs := needs
-	if budgeted {
-		// OldVersions arrives newest-registered first: when short, newest win.
-		allocs = allocateDrainBudget(needs, budget)
-	}
-
-	plan := make(map[string]int, len(result.OldVersions))
-	slugs := make(map[string]bool, len(result.OldVersions))
-	for i, v := range result.OldVersions {
-		plan[v.ApplicationVersion] = allocs[i]
-		slugs[versionSlug(v.ApplicationVersion)] = true
-	}
-
-	m.mu.Lock()
-	last, seen := m.lastOldVersions[key]
-	changed := !seen || !maps.Equal(last, plan)
-	if changed {
-		m.lastOldVersions[key] = plan
-	}
-	m.mu.Unlock()
-
+	keep := make(map[string]bool, len(result.OldVersions))
 	var errs []error
 	for _, v := range result.OldVersions {
-		replicas := plan[v.ApplicationVersion]
+		keep[versionSlug(v.ApplicationVersion)] = true
+		replicas := max(v.DesiredExecutors, 0)
 		if err := m.applyVersionDeployment(ctx, cr, v.ApplicationVersion, replicas); err != nil {
 			errs = append(errs, err)
 			continue
 		}
-		if changed {
-			switch {
-			case replicas == 0 && v.DesiredExecutors <= 0:
-				logger.Info("old version capped to zero by the Conductor rollout policy; deployment parked at zero replicas",
-					"app", key, "version", v.ApplicationVersion,
-					"deployment", versionDeploymentName(name, v.ApplicationVersion))
-			case replicas == 0:
-				logger.Info("old version queued: drain budget exhausted; deployment parked at zero replicas",
-					"app", key, "version", v.ApplicationVersion,
-					"desiredExecutors", v.DesiredExecutors, "budget", budget,
-					"deployment", versionDeploymentName(name, v.ApplicationVersion))
-			default:
-				logger.Info("old version holds work; deployment applied",
-					"app", key, "version", v.ApplicationVersion,
-					"desiredExecutors", v.DesiredExecutors, "replicas", replicas,
-					"deployment", versionDeploymentName(name, v.ApplicationVersion))
-			}
-		}
+		logger.V(2).Info("old version sized to its recommendation",
+			"app", key, "version", v.ApplicationVersion, "replicas", replicas,
+			"deployment", versionDeploymentName(cr.GetName(), v.ApplicationVersion))
 	}
 
-	if err := m.deleteDepartedVersions(ctx, cr, slugs, logger); err != nil {
+	if err := m.deleteDepartedVersions(ctx, cr, keep, logger); err != nil {
 		errs = append(errs, err)
 	}
-	if len(errs) > 0 {
-		m.mu.Lock()
-		delete(m.lastOldVersions, key)
-		m.mu.Unlock()
-		return errors.Join(errs...)
-	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // A version with no snapshot is an error, never rebuilt from the current CR

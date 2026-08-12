@@ -99,7 +99,6 @@ Here is an example manifest for a DBOS Custom Resource. This is very much a stan
     namespace: dbos
   spec:
     appName: dbos-starter-python
-    maxOldVersionsReplicas: 3 # <- total pod budget shared by old-version deployments
     template:
       metadata:
         labels:
@@ -132,9 +131,7 @@ Here is an example manifest for a DBOS Custom Resource. This is very much a stan
 ```
 
 ### Fields reference
-`maxOldVersionsReplicas`: how many pods, in addition to the latest deployment's own fleet, can run old versions simultaneously, across all old versions. Priority is given to later versions.
-
-Every other `Deployment.spec` field (`strategy`, `minReadySeconds`, `progressDeadlineSeconds`, ...) is passed through verbatim to the app's main Deployment, except `replicas` (owned by the autoscaler) and `selector` (owned by the operator). Old-version drain Deployments don't inherit these fields.
+Every `Deployment.spec` field (`strategy`, `minReadySeconds`, `progressDeadlineSeconds`, ...) is passed through verbatim to the app's main Deployment, except `replicas` (owned by the autoscaler) and `selector` (owned by the operator). Old-version drain Deployments don't inherit these fields.
 
 ### Migrating an existing Deployment
 Copy the existing Deployment `spec.template` into the Custom Resource, apply, then repoint KEDA's ScaledObject (or remove your HPA.)
@@ -208,17 +205,9 @@ For every `DBOSApplication` resource in the cluster, the operator:
    `DBOS__APPVERSION`. It is deleted only when the version leaves the response,
    which is Conductor's signal that the policy's queue has no pending work.
    These Deployments' replicas are written by the operator directly (they
-   have no ScaledObject).
-
-   Authoring `spec.maxOldVersionsReplicas` on the CR caps the old versions'
-   total pod count: all old versions share that budget, split equally and
-   capped at each version's recommendation, with leftovers waterfalling.
-   When old versions demand more replicas than available, the operator
-   prioritizes later versions first (LIFO); versions that get 0 stay parked
-   until slots free up. The budget is additive to the latest deployment's
-   replicas and rollout surge.
-   Without `maxOldVersionsReplicas`, old versions are sized to their
-   recommendation, uncapped.
+   have no ScaledObject) and sized to Conductor's recommendation; bound
+   old-version capacity with the autoscaling policy or a namespace
+   ResourceQuota.
 4. **Serves the latest's version desired executor count over an HTTP metrics endpoint**:
    `GET /apps/<app>/autoscale` allows a KEDA ScaledObject to size the latest version's
    deployment based on queue load.

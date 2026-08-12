@@ -46,9 +46,8 @@ type Manager struct {
 	opts    Options
 	pollers map[string]context.CancelFunc // key: namespace/name
 
-	mu              sync.Mutex // guards the dedupe maps below
-	lastStatus      map[string]statusKey
-	lastOldVersions map[string]map[string]int // app → version → planned replicas
+	mu         sync.Mutex // guards lastStatus
+	lastStatus map[string]statusKey
 }
 
 // statusKey distinguishes a real recommendation of 0 from a no-policy answer.
@@ -59,10 +58,9 @@ type statusKey struct {
 
 func NewManager(opts Options) *Manager {
 	return &Manager{
-		opts:            opts,
-		pollers:         map[string]context.CancelFunc{},
-		lastStatus:      map[string]statusKey{},
-		lastOldVersions: map[string]map[string]int{},
+		opts:       opts,
+		pollers:    map[string]context.CancelFunc{},
+		lastStatus: map[string]statusKey{},
 	}
 }
 
@@ -121,7 +119,6 @@ func (m *Manager) reconcileAll(ctx context.Context, logger klog.Logger) error {
 			delete(m.pollers, key)
 			m.mu.Lock()
 			delete(m.lastStatus, key)
-			delete(m.lastOldVersions, key)
 			m.mu.Unlock()
 		}
 	}
@@ -176,11 +173,10 @@ func (m *Manager) reconcileDeployment(ctx context.Context, cr *unstructured.Unst
 }
 
 var specFieldsNotCopied = map[string]bool{
-	"appName":                true, // Operator configuration
-	"maxOldVersionsReplicas": true, // Operator configuration
-	"template":               true, // Already produced by buildDeployment
-	"replicas":               true, // Owned by KEDA and/or the operator
-	"selector":               true, // Operator-owned. Used to "partition" old version pods.
+	"appName":  true, // Operator configuration
+	"template": true, // Already produced by buildDeployment
+	"replicas": true, // Owned by KEDA and/or the operator
+	"selector": true, // Operator-owned. Used to "partition" old version pods.
 }
 
 // Pass through other user-provided fields, outside of spec.template. Latest deployment only.
