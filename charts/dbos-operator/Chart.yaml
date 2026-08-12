@@ -1,0 +1,13 @@
+apiVersion: v2
+name: dbos-operator
+description: >-
+  Kubernetes operator for DBOS applications. Watches DBOSApplication
+  resources, manages their Deployments (including old-version),
+  polls Conductor for autoscale recommendations, and serves them to KEDA/HPA
+  over a plain-HTTP metrics endpoint.
+type: application
+version: 0.2.0
+appVersion: v0.2.0
+home: https://github.com/dbos-inc/dbos-k8s-operator
+sources:
+  - https://github.com/dbos-inc/dbos-k8s-operator

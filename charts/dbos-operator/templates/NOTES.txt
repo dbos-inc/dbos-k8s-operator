@@ -1,0 +1,17 @@
+DBOS operator installed as release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+1. Create the Conductor credential secret (if not already present):
+
+   kubectl -n {{ .Release.Namespace }} create secret generic {{ .Values.conductorLicenseKey.existingSecret }} \
+     --from-literal={{ .Values.conductorLicenseKey.key }}=<your Conductor license key>
+
+   The operator pod will not start without it.
+
+2. Deploy applications as DBOSApplication resources (kubectl explain dbosapplication.spec).
+
+3. To autoscale an app, point a KEDA metrics-api trigger (or any HPA external
+   metrics source) at:
+
+   http://{{ include "dbos-operator.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/apps/<app>/autoscale
+
+   using valueLocation "desiredExecutors".

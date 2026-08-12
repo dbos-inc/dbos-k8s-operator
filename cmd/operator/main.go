@@ -44,15 +44,15 @@ func main() {
 	if err != nil {
 		fatal("load config: %v", err)
 	}
-	jwt, err := config.LoadJWT()
+	licenseKey, err := config.LoadLicenseKey()
 	if err != nil {
-		fatal("load jwt: %v", err)
+		fatal("load license key: %v", err)
 	}
 
 	conductorClient, err := conductor.New(conductor.Options{
 		Endpoint:           cfg.Conductor.Endpoint,
 		OrgName:            cfg.Conductor.OrgName,
-		Token:              jwt,
+		Token:              licenseKey,
 		InsecureSkipVerify: cfg.Conductor.InsecureSkipVerify,
 	})
 	if err != nil {

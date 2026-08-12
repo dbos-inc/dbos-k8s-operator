@@ -1,0 +1,65 @@
+image:
+  repository: ghcr.io/dbos-inc/dbos-k8s-operator
+  # Defaults to the chart's appVersion.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# Install (and upgrade) the DBOSApplication CRD with the chart. The CRD is
+# annotated helm.sh/resource-policy: keep, so uninstall leaves it — and every
+# DBOSApplication — in place. Disable when the CRD is managed out of band.
+crds:
+  install: true
+
+config:
+  # Conductor organization name (required). Passed as the :orgName URL segment.
+  orgName: ""
+  # Conductor API base URL. Empty derives https://<dbosDomain>/conductor/v1alpha1
+  # (DBOS-managed cloud). Point at your conductor Service when self-hosting,
+  # e.g. http://conductor.my-namespace.svc.cluster.local:8090.
+  endpoint: ""
+  # Disable TLS verification of the Conductor endpoint. Local/dev only.
+  insecureSkipVerify: false
+  # Per-app autoscale poll cadence, and the backoff cap after failed polls.
+  pollerInterval: 30s
+  pollerMaxBackoff: 30s
+  # Namespace to watch for DBOSApplications; empty = all namespaces.
+  watchNamespace: ""
+  # How often CRs are re-listed and Deployments re-applied.
+  reconcileInterval: 10s
+
+# Used only when config.endpoint is empty.
+dbosDomain: cloud.dbos.dev
+
+# Secret holding the Conductor license key. Not created by the chart:
+#   kubectl create secret generic dbos-conductor-license-key --from-literal=token=<license key>
+conductorLicenseKey:
+  existingSecret: dbos-conductor-license-key
+  key: token
+
+replicas: 1
+
+# klog verbosity (--v).
+verbosity: 2
+
+service:
+  # Port of the metrics Service KEDA/HPA polls.
+  port: 8080
+
+serviceAccount:
+  create: true
+  # Defaults to the release fullname.
+  name: ""
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+nameOverride: ""
+fullnameOverride: ""
+nodeSelector: {}
+tolerations: []
+affinity: {}

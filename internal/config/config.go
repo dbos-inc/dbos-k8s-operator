@@ -64,9 +64,10 @@ type Conductor struct {
 	InsecureSkipVerify bool `json:"insecureSkipVerify,omitempty"`
 }
 
-// JWTEnvVar is the environment variable from which LoadJWT reads the bearer
-// JWT. Populated in the Deployment from a Secret via env.valueFrom.secretKeyRef.
-const JWTEnvVar = "DBOS_CONDUCTOR_JWT"
+// LicenseKeyEnvVar is the environment variable from which LoadLicenseKey reads
+// the Conductor license key (the bearer token for API calls). Populated in the
+// Deployment from a Secret via env.valueFrom.secretKeyRef.
+const LicenseKeyEnvVar = "DBOS_CONDUCTOR_LICENSE_KEY"
 
 // Poller controls the per-app autoscale poll cadence.
 type Poller struct {
@@ -117,13 +118,13 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
-// LoadJWT reads the bearer token from the DBOS_CONDUCTOR_JWT environment
-// variable and returns its trimmed contents. Called separately from Load so
-// the JWT source can change independently of the YAML config.
-func LoadJWT() (string, error) {
-	tok := strings.TrimSpace(os.Getenv(JWTEnvVar))
+// LoadLicenseKey reads the license key from the DBOS_CONDUCTOR_LICENSE_KEY
+// environment variable and returns its trimmed contents. Called separately
+// from Load so the key source can change independently of the YAML config.
+func LoadLicenseKey() (string, error) {
+	tok := strings.TrimSpace(os.Getenv(LicenseKeyEnvVar))
 	if tok == "" {
-		return "", fmt.Errorf("%s is unset or empty", JWTEnvVar)
+		return "", fmt.Errorf("%s is unset or empty", LicenseKeyEnvVar)
 	}
 	return tok, nil
 }

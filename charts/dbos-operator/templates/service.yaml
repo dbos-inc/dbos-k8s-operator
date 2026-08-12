@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "dbos-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dbos-operator.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "dbos-operator.selectorLabels" . | nindent 4 }}
+  ports:
+    # Plain-HTTP metrics endpoint. KEDA ScaledObjects point their metrics-api
+    # trigger at http://<fullname>.<namespace>.svc.cluster.local:<port>/apps/<app>/autoscale
+    - name: metrics
+      port: {{ .Values.service.port }}
+      targetPort: metrics
+      protocol: TCP

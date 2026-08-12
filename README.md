@@ -25,13 +25,24 @@ The DBOS operator manages these deployments for you, based on the application's 
 
 ## DBOS Operator
 
+You'll need a DBOS organization name and a DBOS Conductor API key.
+
 ### Installation
 
-Helm chart
+**Using Helm**
+You can install the DBOS operator using Helm:
+
+```bash
+# Add --set config.endpoint=... for self-hosted conductor.
+helm install dbos-operator oci://ghcr.io/dbos-inc/charts/dbos-operator -n dbos-operator  --create-namespace --set config.orgName=<org>
+```
+
+**install.yaml**
+```bash
+kubectl apply -f install.yaml
+```
 
 ### Configuration
-
-- APIkey secret
 
 The runtime config is a YAML file mounted from the `dbos-operator` ConfigMap at `/etc/dbos-operator/config.yaml`.
 
@@ -55,12 +66,11 @@ kubernetes:
   reconcileInterval: 10s
 ```
 
-You can find a template under `config/manager/configmap.yaml`.
-Apply the edited ConfigMap, then `kubectl -n dbos-operator rollout restart deployment/dbos-operator` (config is read once at startup).
+With Helm, every field maps to a `config.*` value (see `charts/dbos-operator/values.yaml`); changing one via `helm upgrade` restarts the pod automatically (config is read once at startup). If you installed from `install.yaml`, edit the `dbos-operator` ConfigMap and `kubectl -n dbos-operator rollout restart deployment/dbos-operator`.
 Apps need no restart: Custom Resources are re-listed every `reconcileInterval`.
 
 ### RBAC
-(`config/rbac/operator.yaml`): read `dbosapplications`, write their `status`, and get/list/create/patch/delete `deployments` (delete only ever targets a versioned Deployment this operator owns).
+(`charts/dbos-operator/templates/rbac.yaml`): read `dbosapplications`, write their `status`, and get/list/create/patch/delete `deployments` (delete only ever targets a versioned Deployment this operator owns).
 
 
 ## DBOSApplication CRD
@@ -140,11 +150,13 @@ Here is an example manifest for a DBOS CRD. This is very much a standard deploym
                   path: ca.crt
 ```
 
-`maxOldVersionsReplicas`: how many pods, in addition to the latest deployment's own fleet, can run old versions simultaneously — a single total shared by all old versions. Priority is given to later versions. You can also set `spec.strategy` (exactly as in a Deployment) to control the latest deployment's rollout; it plays no role in old-version sizing.
+`maxOldVersionsReplicas`: how many pods, in addition to the latest deployment's own fleet, can run old versions simultaneously, across all old versions. Priority is given to later versions.
 
-Applying a CR whose name matches an existing Deployment **adopts** it via server-side apply — no pod churn if the template matches.
+Applying a CR whose name matches an existing Deployment **adopts** it via server-side apply (no pod churn if the template matches.)
 
-**Version management**: by default, the operator generates and inject a DBOS application version. Internally it uses that version to map CR manifests, used when deploying older code versions. You can set `DBOS__APPVERSION` yourself, and when using the same version twice, the operator will always replace its mapping with the latest CR manifest.
+**Application version management**: by default, the operator generates and inject a DBOS application version using the `DBOS__APPVERSION` environment variable.
+Internally it uses that version to record which CR manifest should be used to run old application versions.
+You can set `DBOS__APPVERSION` yourself: the operator will replace mapped version entries with the latest CR manifest.
 
 ## Pointing KEDA to the operator
 

@@ -1,6 +1,7 @@
 # DBOS Kubernetes Metrics Operator
 
 IMG          ?= controller:latest
+ORG          ?= local
 REGION       ?= us-east-1
 NAMESPACE    ?= dbos-operator
 
@@ -44,26 +45,34 @@ docker-push:
 ##@ Deploy
 
 .PHONY: deploy
-deploy: ## Apply the full operator install (kustomize default overlay; pass IMG=...).
-	cd config/manager && \
-	  sed -i.bak "s|image: .*|image: $(IMG)|" deployment.yaml && rm deployment.yaml.bak
-	kubectl apply -k config/default
+deploy: ## Install/upgrade the operator from the local chart (pass IMG=... ORG=...; extra values via HELM_ARGS=...).
+	helm upgrade --install dbos-operator charts/dbos-operator \
+	  -n $(NAMESPACE) --create-namespace \
+	  --set image.repository=$(firstword $(subst :, ,$(IMG))) \
+	  --set-string image.tag=$(lastword $(subst :, ,$(IMG))) \
+	  --set config.orgName=$(ORG) \
+	  $(HELM_ARGS)
 
 .PHONY: install-yaml
-install-yaml: ## Regenerate install.yaml from the kustomize default overlay.
+install-yaml: ## Regenerate install.yaml from the chart (same rendering as the release workflow).
 	@{ \
 	  echo "# DO NOT EDIT BY HAND."; \
-	  echo "# Generated from config/ via 'make install-yaml' (or the release workflow)."; \
-	  echo "# Source: kubectl kustomize config/default"; \
-	  echo "# To change this file, edit the manifests under config/ and re-run the target."; \
+	  echo "# Generated via 'make install-yaml' (or the release workflow): helm template charts/dbos-operator."; \
+	  echo "# One fixed rendering — namespace dbos-operator, orgName CHANGEME."; \
 	  echo "---"; \
-	  kubectl kustomize config/default; \
+	  echo "apiVersion: v1"; \
+	  echo "kind: Namespace"; \
+	  echo "metadata:"; \
+	  echo "  name: dbos-operator"; \
+	  helm template dbos-operator charts/dbos-operator \
+	    --namespace dbos-operator \
+	    --set config.orgName=CHANGEME; \
 	} > install.yaml
 	@echo "wrote install.yaml ($$(wc -l < install.yaml) lines)"
 
 .PHONY: undeploy
-undeploy: ## Remove every resource the default overlay applied
-	kubectl delete -k config/default --ignore-not-found
+undeploy: ## Uninstall the operator release (the CRD and DBOSApplications are kept).
+	helm uninstall dbos-operator -n $(NAMESPACE) --ignore-not-found
 
 .PHONY: rollout-restart
 rollout-restart: ## Pick up a freshly pushed image with the same tag.

@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "dbos-operator.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "dbos-operator.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    # Apps are NOT listed here: create DBOSApplication resources instead.
+    conductor:
+      orgName: {{ required "config.orgName is required" .Values.config.orgName | quote }}
+      {{- with .Values.config.endpoint }}
+      endpoint: {{ . | quote }}
+      {{- end }}
+      {{- if .Values.config.insecureSkipVerify }}
+      insecureSkipVerify: true
+      {{- end }}
+    poller:
+      interval: {{ .Values.config.pollerInterval | quote }}
+      maxBackoff: {{ .Values.config.pollerMaxBackoff | quote }}
+    http:
+      listen: ":8080"
+    kubernetes:
+      namespace: {{ .Values.config.watchNamespace | quote }}
+      reconcileInterval: {{ .Values.config.reconcileInterval | quote }}

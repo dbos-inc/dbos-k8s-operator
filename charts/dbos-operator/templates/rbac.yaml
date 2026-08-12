@@ -1,10 +1,13 @@
 # The operator reads DBOSApplications, writes their status, and owns the
-# Deployments derived from them. Cluster-scoped so a single operator can watch
-# every namespace; scope the config's kubernetes.namespace to narrow behavior.
+# Deployments and template-snapshot ControllerRevisions derived from them.
+# Cluster-scoped so a single operator can watch every namespace; set
+# config.watchNamespace to narrow behavior.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: dbos-operator
+  name: {{ include "dbos-operator.fullname" . }}
+  labels:
+    {{- include "dbos-operator.labels" . | nindent 4 }}
 rules:
   - apiGroups: ["dbos.dev"]
     resources: ["dbosapplications"]
@@ -14,25 +17,22 @@ rules:
     verbs: ["get", "patch", "update"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    # delete: an old application version's Deployment is torn down once
-    # Conductor stops reporting that version.
     verbs: ["get", "list", "create", "patch", "update", "delete"]
   - apiGroups: ["apps"]
     resources: ["controllerrevisions"]
-    # Template snapshots: one per distinct pod template, created at rollout so
-    # old versions scale up on the template they actually ran. delete: only to
-    # replace a snapshot when an author-pinned version changes template.
     verbs: ["get", "create", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: dbos-operator
+  name: {{ include "dbos-operator.fullname" . }}
+  labels:
+    {{- include "dbos-operator.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: dbos-operator
+  name: {{ include "dbos-operator.fullname" . }}
 subjects:
   - kind: ServiceAccount
-    name: dbos-operator
-    namespace: dbos-operator
+    name: {{ include "dbos-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
