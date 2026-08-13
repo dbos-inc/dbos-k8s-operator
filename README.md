@@ -29,7 +29,7 @@ You'll also need KEDA installed.
 
 ## Installing the operator
 
-### Using Helm
+### Using Helm
 
 ```bash
 helm install dbos-operator oci://ghcr.io/dbos-inc/charts/dbos-operator -n dbos-operator --create-namespace --set config.orgName=<your-org>
@@ -45,7 +45,7 @@ Note the operator expects an environment variable named `DBOS_API_KEY`.
 
 The chart also installs the DBOSApplication CRD.
 
-### Using install.yaml
+### Using install.yaml
 Every release attaches an install.yaml pinned to that release's image, installing into the dbos-operator namespace.
 
 ```bash
@@ -167,7 +167,8 @@ spec:
   triggers:
     - type: metrics-api
       metadata:
-        url: "http://dbos-operator.dbos-operator.svc.cluster.local:8080/apps/dbos-starter-python/autoscale"
+        # /apps/<namespace>/<name> of the DBOSApplication
+        url: "http://dbos-operator.dbos-operator.svc.cluster.local:8080/apps/dbos/dbos-starter-python/autoscale"
         valueLocation: "desiredExecutors"
         targetValue: "1"
 ```
@@ -175,17 +176,33 @@ spec:
 ## Verifying
 ```bash
 kubectl get dbosapp
-  NAME                  DESIRED   POLLED
-  dbos-starter-python   3         2026-08-11T16:14:02Z
+  NAME                  READY   DESIRED   POLLED
+  dbos-starter-python   True    3         2026-08-11T16:14:02Z
+
+kubectl wait --for=condition=Ready dbosapp/dbos-starter-python -n dbos
 
 kubectl get dbosapp dbos-starter-python -n dbos -o jsonpath='{.status}' | jq .
   {
+    "conditions": [
+      {
+        "lastTransitionTime": "2026-08-11T23:23:59Z",
+        "message": "",
+        "observedGeneration": 2,
+        "reason": "Reconciled",
+        "status": "True",
+        "type": "Ready"
+      }
+    ],
     "desiredExecutors": 0,
     "lastPolledAt": "2026-08-11T23:23:59Z",
     "noPolicy": false,
-    "observedAt": 1786490639438
+    "observedAt": 1786490639438,
+    "observedGeneration": 2
   }
 ```
+
+`status.conditions` reports reconcile outcomes: a rejected manifest (for example a
+user-set `DBOS__APPVERSION`) shows up as `Ready=False` with the error message.
 
 `DESIRED` is Conductor's recommendation for the latest version; if it stays 0 and `status.noPolicy` is true, the app has no autoscaling policy, and the metrics endpoint return a 404 error so KEDA holds replicas.
 
@@ -202,16 +219,16 @@ For every `DBOSApplication` resource in the cluster, the operator:
 3. **Keeps a Deployment per old application version.** Workflows only finish on
    an executor of the version that enqueued them, so every non-latest entry in
    the response gets its own Deployment, named `<app>-<version>`, pods
-   labelled `dbos.dev/app-version` and pinned to that version via
-   `DBOS__APPVERSION`. It is deleted only when the version leaves the response,
+   labelled `dbos.dev/app-version` (not `app=<name>`, which selects only the
+   latest version's pods) and pinned to that version via `DBOS__APPVERSION`. It is deleted only when the version leaves the response,
    which is Conductor's signal that the policy's queue has no pending work.
    These Deployments' replicas are written by the operator directly (they
    have no ScaledObject) and sized to Conductor's recommendation; bound
    old-version capacity with the autoscaling policy or a namespace
    ResourceQuota.
 4. **Serves the latest's version desired executor count over an HTTP metrics endpoint**:
-   `GET /apps/<app>/autoscale` allows a KEDA ScaledObject to size the latest version's
-   deployment based on queue load.
+   `GET /apps/<namespace>/<name>/autoscale` (namespace and name of the DBOSApplication)
+   allows a KEDA ScaledObject to size the latest version's deployment based on queue load.
 
 ## Development
 

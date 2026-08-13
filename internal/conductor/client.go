@@ -24,7 +24,6 @@ const defaultCloudPathPrefix = "/conductor/v1alpha1"
 
 type VersionRecommendation struct {
 	ApplicationVersion string
-	IsLatest           bool
 	DesiredExecutors   int
 	ObservedAt         int64 // epoch ms
 }
@@ -128,16 +127,17 @@ func (c *Client) QueueAutoscale(ctx context.Context, app string) (*AutoscaleResu
 		if err := json.Unmarshal(raw, &e); err != nil {
 			return nil, fmt.Errorf("QueueAutoscale %s: decode entry: %w", app, err)
 		}
-		if e.IsLatest && result.Body == nil {
-			result.Body = raw
-			result.ApplicationVersion = e.ApplicationVersion
-			result.DesiredExecutors = e.DesiredExecutors
-			result.ObservedAt = e.ObservedAt
+		if e.IsLatest {
+			if result.Body == nil {
+				result.Body = raw
+				result.ApplicationVersion = e.ApplicationVersion
+				result.DesiredExecutors = e.DesiredExecutors
+				result.ObservedAt = e.ObservedAt
+			}
 			continue
 		}
 		result.OldVersions = append(result.OldVersions, VersionRecommendation{
 			ApplicationVersion: e.ApplicationVersion,
-			IsLatest:           e.IsLatest,
 			DesiredExecutors:   e.DesiredExecutors,
 			ObservedAt:         e.ObservedAt,
 		})

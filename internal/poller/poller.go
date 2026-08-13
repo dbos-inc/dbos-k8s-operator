@@ -18,19 +18,17 @@ const maxBackoff = 60 * time.Second
 
 type Config struct {
 	AppName  string
+	StoreKey string
 	Interval time.Duration
-
-	OnResult func(r store.Result) // optional, invoked after every successful tick
 }
 
-// Run polls until ctx is cancelled; the store entry is deleted on exit.
-func Run(ctx context.Context, cfg Config, client *conductor.Client, s store.Store) {
+// Run polls until ctx is cancelled; the manager owns store entry cleanup.
+func Run(ctx context.Context, cfg Config, client *conductor.Client, s *store.InMemory) {
 	logger := klog.FromContext(ctx).WithValues("app", cfg.AppName)
 
 	backoff := cfg.Interval
 	timer := time.NewTimer(0) // first tick immediate
 	defer timer.Stop()
-	defer s.Delete(cfg.AppName)
 
 	for {
 		select {
@@ -38,8 +36,8 @@ func Run(ctx context.Context, cfg Config, client *conductor.Client, s store.Stor
 			return
 		case <-timer.C:
 			if err := tick(ctx, cfg, client, s, logger); err != nil {
-				logger.V(2).Error(err, "poll tick failed")
-				s.MarkStale(cfg.AppName)
+				logger.V(2).Info("poll tick failed", "err", err)
+				s.MarkStale(cfg.StoreKey)
 				backoff *= 2
 				if backoff > maxBackoff {
 					backoff = maxBackoff
@@ -53,18 +51,14 @@ func Run(ctx context.Context, cfg Config, client *conductor.Client, s store.Stor
 }
 
 // A failed tick leaves the previous result in place.
-func tick(ctx context.Context, cfg Config, client *conductor.Client, s store.Store, logger klog.Logger) error {
+func tick(ctx context.Context, cfg Config, client *conductor.Client, s *store.InMemory, logger klog.Logger) error {
 	tickCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
 	res, err := client.QueueAutoscale(tickCtx, cfg.AppName)
 	if errors.Is(err, conductor.ErrNoPolicy) {
-		r := store.Result{NoPolicy: true, PolledAt: time.Now()}
 		logger.V(2).Info("polled", "noPolicy", true)
-		s.Set(cfg.AppName, r)
-		if cfg.OnResult != nil {
-			cfg.OnResult(r)
-		}
+		s.Set(cfg.StoreKey, store.Result{NoPolicy: true, PolledAt: time.Now()})
 		return nil
 	}
 	if err != nil {
@@ -79,10 +73,7 @@ func tick(ctx context.Context, cfg Config, client *conductor.Client, s store.Sto
 		PolledAt:         time.Now(),
 	}
 	logger.V(2).Info("polled", "desiredExecutors", r.DesiredExecutors, "oldVersions", len(r.OldVersions))
-	s.Set(cfg.AppName, r)
-	if cfg.OnResult != nil {
-		cfg.OnResult(r)
-	}
+	s.Set(cfg.StoreKey, r)
 	return nil
 }
 

@@ -18,17 +18,6 @@ type Result struct {
 	Stale            bool // the poll after this result failed; cleared by the next Set
 }
 
-type Store interface {
-	Set(app string, r Result)
-	Get(app string) (Result, bool)
-	Delete(app string)
-	Apps() []string
-
-	// MarkStale flags the app's result as stale, keeping the rest of the entry
-	// (PolledAt included) intact. No-op if the app has no result.
-	MarkStale(app string)
-}
-
 type InMemory struct {
 	mu    sync.RWMutex
 	byApp map[string]Result
@@ -51,6 +40,8 @@ func (s *InMemory) Get(app string) (Result, bool) {
 	return r, ok
 }
 
+// MarkStale flags the app's result as stale, keeping the rest of the entry
+// (PolledAt included) intact. No-op if the app has no result.
 func (s *InMemory) MarkStale(app string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -64,14 +55,4 @@ func (s *InMemory) Delete(app string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.byApp, app)
-}
-
-func (s *InMemory) Apps() []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]string, 0, len(s.byApp))
-	for app := range s.byApp {
-		out = append(out, app)
-	}
-	return out
 }

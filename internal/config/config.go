@@ -108,5 +108,11 @@ func (c *Config) validate() error {
 	if c.Conductor.OrgName == "" {
 		return errors.New("conductor.orgName is required")
 	}
+	if c.Poller.Interval.Native() <= 0 {
+		return errors.New("poller.interval must be positive")
+	}
+	if c.Kubernetes.ReconcileInterval.Native() <= 0 {
+		return errors.New("kubernetes.reconcileInterval must be positive")
+	}
 	return nil
 }

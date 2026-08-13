@@ -18,10 +18,10 @@ import (
 // KEDA propagates no metric on scaler error, so the HPA holds the current
 // replica count rather than acting on stale data.
 type Server struct {
-	store store.Store
+	store *store.InMemory
 }
 
-func NewServer(s store.Store) *Server {
+func NewServer(s *store.InMemory) *Server {
 	return &Server{store: s}
 }
 
@@ -30,12 +30,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("GET /apps/{app}/autoscale", s.serveApp)
+	mux.HandleFunc("GET /apps/{namespace}/{name}/autoscale", s.serveApp)
 	return mux
 }
 
 func (s *Server) serveApp(w http.ResponseWriter, r *http.Request) {
-	app := r.PathValue("app")
+	app := r.PathValue("namespace") + "/" + r.PathValue("name")
 	result, ok := s.store.Get(app)
 	if !ok {
 		errJSON(w, http.StatusServiceUnavailable, "no successful poll for app "+app)

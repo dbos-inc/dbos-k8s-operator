@@ -61,7 +61,9 @@ kubernetes:
 
 func TestLoadRejects(t *testing.T) {
 	cases := map[string]string{
-		"missing orgName": `poller: {interval: 1s}`,
+		"missing orgName":            `poller: {interval: 1s}`,
+		"negative poll interval":     "conductor: {orgName: o}\npoller: {interval: -1s}",
+		"negative reconcileInterval": "conductor: {orgName: o}\nkubernetes: {reconcileInterval: -5s}",
 	}
 	for name, content := range cases {
 		if _, err := Load(write(t, content)); err == nil {

@@ -18,7 +18,7 @@ kubectl -n dbos-operator create secret generic dbos-api-key \
 
 KEDA is not part of this chart — install it once per cluster from the
 upstream release manifest, then point a `ScaledObject` metrics-api trigger at
-`http://dbos-operator.dbos-operator.svc.cluster.local:8080/apps/<app>/autoscale`
+`http://dbos-operator.dbos-operator.svc.cluster.local:8080/apps/<namespace>/<name>/autoscale`
 (valueLocation `desiredExecutors`).
 
 ## Values

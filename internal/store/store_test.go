@@ -24,11 +24,6 @@ func TestInMemory(t *testing.T) {
 		t.Fatalf("Set did not replace: %+v", got)
 	}
 
-	s.Set("b", Result{DesiredExecutors: 1})
-	if apps := s.Apps(); len(apps) != 2 {
-		t.Fatalf("Apps = %v", apps)
-	}
-
 	s.MarkStale("a")
 	if got, _ := s.Get("a"); !got.Stale || got.DesiredExecutors != 7 {
 		t.Fatalf("MarkStale = %+v, want Stale with the entry intact", got)

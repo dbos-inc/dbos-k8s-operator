@@ -12,6 +12,6 @@ DBOS operator installed as release {{ .Release.Name }} in namespace {{ .Release.
 3. To autoscale an app, point a KEDA metrics-api trigger (or any HPA external
    metrics source) at:
 
-   http://{{ include "dbos-operator.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/apps/<app>/autoscale
+   http://{{ include "dbos-operator.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/apps/<namespace>/<name>/autoscale
 
    using valueLocation "desiredExecutors".

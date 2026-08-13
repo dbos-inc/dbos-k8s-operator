@@ -34,15 +34,20 @@ func TestBuildVersionDeployment(t *testing.T) {
 		t.Errorf("spec.replicas = %d (found=%v), want 3", replicas, found)
 	}
 
-	for _, path := range [][]string{
-		{"metadata", "labels"},
-		{"spec", "selector", "matchLabels"},
-		{"spec", "template", "metadata", "labels"},
-	} {
-		labels, _, _ := unstructured.NestedMap(d, path...)
-		if labels["app"] != "myapp" || labels[versionLabel] != "v1" {
-			t.Errorf("labels at %v = %v, want app=myapp and %s=v1", path, labels, versionLabel)
-		}
+	labels, _, _ := unstructured.NestedMap(d, "metadata", "labels")
+	if labels["app"] != "myapp" || labels[versionLabel] != "v1" {
+		t.Errorf("metadata labels = %v, want app=myapp and %s=v1", labels, versionLabel)
+	}
+	selector, _, _ := unstructured.NestedMap(d, "spec", "selector", "matchLabels")
+	if len(selector) != 1 || selector[versionLabel] != "v1" {
+		t.Errorf("selector = %v, want only %s=v1", selector, versionLabel)
+	}
+	podLabels, _, _ := unstructured.NestedMap(d, "spec", "template", "metadata", "labels")
+	if _, ok := podLabels["app"]; ok {
+		t.Errorf("pod labels = %v, want no app= label", podLabels)
+	}
+	if podLabels[versionLabel] != "v1" {
+		t.Errorf("pod labels = %v, want %s=v1", podLabels, versionLabel)
 	}
 
 	containers, _, _ := unstructured.NestedSlice(d, "spec", "template", "spec", "containers")
@@ -83,4 +88,3 @@ func TestBuildVersionDeploymentCarriesNoStrategy(t *testing.T) {
 		t.Error("versioned deployment carries spec.strategy, want none")
 	}
 }
-

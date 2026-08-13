@@ -42,7 +42,7 @@ func newVersionFixture(t *testing.T, result store.Result, existing ...*unstructu
 		}, objects...)
 
 	// The fake client does not implement server-side apply; accept the patches.
-	client.PrependReactor("patch", "deployments", func(action k8stesting.Action) (bool, runtime.Object, error) {
+	acceptApply := func(action k8stesting.Action) (bool, runtime.Object, error) {
 		patch, ok := action.(k8stesting.PatchAction)
 		if !ok || patch.GetPatchType() != types.ApplyPatchType {
 			return false, nil, nil
@@ -52,10 +52,12 @@ func newVersionFixture(t *testing.T, result store.Result, existing ...*unstructu
 			return true, nil, err
 		}
 		return true, applied, nil
-	})
+	}
+	client.PrependReactor("patch", "deployments", acceptApply)
+	client.PrependReactor("patch", "dbosapplications", acceptApply)
 
 	s := store.NewInMemory()
-	s.Set(appName(cr), result)
+	s.Set(crKey(cr), result)
 	m := NewManager(Options{Client: client, Store: s, PollInterval: 5 * time.Second})
 	client.ClearActions()
 	return &versionFixture{manager: m, client: client, cr: cr}
@@ -186,6 +188,17 @@ func TestReconcileOldVersionsApplies(t *testing.T) {
 		if pinned != version {
 			t.Errorf("version %q pinned DBOS__APPVERSION = %q, want %q", version, pinned, version)
 		}
+		selector, _, _ := unstructured.NestedMap(manifest, "spec", "selector", "matchLabels")
+		if len(selector) != 1 || selector[versionLabel] != version {
+			t.Errorf("version %q selector = %v, want only %s=%s", version, selector, versionLabel, version)
+		}
+		podLabels, _, _ := unstructured.NestedMap(manifest, "spec", "template", "metadata", "labels")
+		if _, ok := podLabels["app"]; ok {
+			t.Errorf("version %q pod labels carry app=: %v — drain pods must not match the main selector", version, podLabels)
+		}
+		if podLabels[versionLabel] != version {
+			t.Errorf("version %q pod labels = %v", version, podLabels)
+		}
 	}
 	if got := f.deleted(); len(got) != 0 {
 		t.Errorf("deleted %v, want nothing deleted", got)
@@ -265,13 +278,13 @@ func TestReconcileOldVersionsIgnoresUnusableResults(t *testing.T) {
 
 	cases := map[string]func(*versionFixture){
 		"no poll result yet": func(f *versionFixture) {
-			f.manager.opts.Store.Delete(appName(f.cr))
+			f.manager.opts.Store.Delete(crKey(f.cr))
 		},
 		"no autoscaling policy": func(f *versionFixture) {
-			f.manager.opts.Store.Set(appName(f.cr), store.Result{NoPolicy: true, PolledAt: time.Now()})
+			f.manager.opts.Store.Set(crKey(f.cr), store.Result{NoPolicy: true, PolledAt: time.Now()})
 		},
 		"stale result": func(f *versionFixture) {
-			f.manager.opts.Store.MarkStale(appName(f.cr))
+			f.manager.opts.Store.MarkStale(crKey(f.cr))
 		},
 	}
 	for name, mutate := range cases {
@@ -288,4 +301,3 @@ func TestReconcileOldVersionsIgnoresUnusableResults(t *testing.T) {
 		})
 	}
 }
-

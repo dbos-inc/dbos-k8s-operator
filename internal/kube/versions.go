@@ -32,20 +32,27 @@ func buildVersionDeployment(cr *unstructured.Unstructured, version string, repli
 	if err := unstructured.SetNestedField(deployment, versionDeploymentName(cr.GetName(), version), "metadata", "name"); err != nil {
 		return nil, err
 	}
-	// Init fields not copied from the CR specs.
-	for _, path := range [][]string{
-		{"metadata", "labels"},
-		{"spec", "selector", "matchLabels"},
-		{"spec", "template", "metadata", "labels"},
-	} {
-		labels, _, _ := unstructured.NestedMap(deployment, path...)
-		if labels == nil {
-			labels = map[string]any{}
-		}
-		labels[versionLabel] = version
-		if err := unstructured.SetNestedMap(deployment, labels, path...); err != nil {
-			return nil, err
-		}
+	labels, _, _ := unstructured.NestedMap(deployment, "metadata", "labels")
+	if labels == nil {
+		labels = map[string]any{}
+	}
+	labels[versionLabel] = version
+	if err := unstructured.SetNestedMap(deployment, labels, "metadata", "labels"); err != nil {
+		return nil, err
+	}
+	// The selector must not include app=<name>: the main Deployment's immutable
+	// selector is exactly that, and drain pods must not match it.
+	if err := unstructured.SetNestedMap(deployment, map[string]any{versionLabel: version}, "spec", "selector", "matchLabels"); err != nil {
+		return nil, err
+	}
+	podLabels, _, _ := unstructured.NestedMap(deployment, "spec", "template", "metadata", "labels")
+	if podLabels == nil {
+		podLabels = map[string]any{}
+	}
+	delete(podLabels, "app")
+	podLabels[versionLabel] = version
+	if err := unstructured.SetNestedMap(deployment, podLabels, "spec", "template", "metadata", "labels"); err != nil {
+		return nil, err
 	}
 	if err := unstructured.SetNestedField(deployment, int64(replicas), "spec", "replicas"); err != nil {
 		return nil, err
@@ -85,10 +92,10 @@ func pinAppVersion(deployment map[string]any, version string) error {
 }
 
 func (m *Manager) reconcileOldVersions(ctx context.Context, cr *unstructured.Unstructured, logger klog.Logger) error {
-	key := cr.GetNamespace() + "/" + cr.GetName()
+	key := crKey(cr)
 
 	// How many old versions do we have sizing recommendations for?
-	result, ok := m.opts.Store.Get(appName(cr))
+	result, ok := m.opts.Store.Get(key)
 	if !ok || result.NoPolicy {
 		return nil
 	}
