@@ -29,7 +29,6 @@ upstream release manifest, then point a `ScaledObject` metrics-api trigger at
 | `config.endpoint` | `""` | Conductor API base URL; empty derives `https://<dbosDomain>/conductor/v1alpha1` |
 | `config.insecureSkipVerify` | `false` | Skip TLS verification of the Conductor endpoint (dev only) |
 | `config.pollerInterval` | `30s` | Per-app autoscale poll cadence |
-| `config.pollerMaxBackoff` | `30s` | Backoff cap after failed polls |
 | `config.watchNamespace` | `""` | Namespace to watch; empty = all |
 | `config.reconcileInterval` | `10s` | CR re-list / Deployment re-apply cadence |
 | `dbosDomain` | `cloud.dbos.dev` | Used only when `config.endpoint` is empty |

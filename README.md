@@ -5,9 +5,11 @@ The DBOS operator helps you perform fleet management for DBOS applications in Ku
 1. It exposes a metrics endpoint for KEDA to scale workers based on a DBOS queue utilization. This endpoint serves a desired executor count for the _latest version_ of your application.
 2. It manages deployments for older versions of your workflows, also based on a DBOS queue utilization.
 
-The DBOS Operator takes ownership of the application Deployment, which you can now configure using a `DBOSApplication` resource.
+The DBOS Operator takes ownership of the application Deployment, which you can now configure using a `DBOSApplication` Custom Resource.
 
 Using the DBOS operator requires a DBOS API key (self-hosted Conductor or a DBOS Teams subscription).
+
+One operator can handle multiple applications for a single DBOS Organization.
 
 ## How it works
 
@@ -58,8 +60,8 @@ kubectl -n dbos-operator rollout restart deployment/dbos-operator
 
 ### Configuration
 
-The runtime config is a YAML file mounted from the dbos-operator ConfigMap at /etc/dbos-operator/config.yaml, read once at startup.
-All fields except conductor.orgName are optional.
+The runtime config is a YAML file mounted from the dbos-operator ConfigMap at `/etc/dbos-operator/config.yaml`, read once at startup.
+All fields except `conductor.orgName` are optional.
 
 ```yaml
 conductor:
@@ -71,7 +73,6 @@ conductor:
 
 poller:
   interval: 10s        # autoscale poll cadence per app (default 30s = KEDA's default)
-  maxBackoff: 30s     # failure backoff cap; default max(interval, 30s)
 
 http:
   listen: ":8080"     # KEDA-facing metrics endpoint

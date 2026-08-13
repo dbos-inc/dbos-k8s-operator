@@ -19,9 +19,8 @@ config:
   endpoint: ""
   # Disable TLS verification of the Conductor endpoint. Local/dev only.
   insecureSkipVerify: false
-  # Per-app autoscale poll cadence, and the backoff cap after failed polls.
+  # Per-app autoscale poll cadence.
   pollerInterval: 30s
-  pollerMaxBackoff: 30s
   # Namespace to watch for DBOSApplications; empty = all namespaces.
   watchNamespace: ""
   # How often CRs are re-listed and Deployments re-applied.

@@ -55,8 +55,6 @@ const APIKeyEnvVar = "DBOS_API_KEY"
 
 type Poller struct {
 	Interval Duration `json:"interval,omitempty"` // default 30s, matching KEDA's
-
-	MaxBackoff Duration `json:"maxBackoff,omitempty"`
 }
 
 type HTTP struct {
@@ -98,9 +96,6 @@ func (c *Config) applyDefaults() {
 	if c.Poller.Interval == 0 {
 		c.Poller.Interval = Duration(30 * time.Second)
 	}
-	if c.Poller.MaxBackoff == 0 {
-		c.Poller.MaxBackoff = max(c.Poller.Interval, Duration(30*time.Second))
-	}
 	if c.HTTP.Listen == "" {
 		c.HTTP.Listen = ":8080"
 	}
@@ -112,9 +107,6 @@ func (c *Config) applyDefaults() {
 func (c *Config) validate() error {
 	if c.Conductor.OrgName == "" {
 		return errors.New("conductor.orgName is required")
-	}
-	if c.Poller.MaxBackoff.Native() < c.Poller.Interval.Native() {
-		return errors.New("poller.maxBackoff must be >= poller.interval")
 	}
 	return nil
 }

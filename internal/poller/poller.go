@@ -13,10 +13,12 @@ import (
 	"github.com/dbos-inc/dbos-k8s-operator/internal/store"
 )
 
+// maxBackoff caps the failure backoff between ticks.
+const maxBackoff = 60 * time.Second
+
 type Config struct {
-	AppName    string
-	Interval   time.Duration
-	MaxBackoff time.Duration
+	AppName  string
+	Interval time.Duration
 
 	OnResult func(r store.Result) // optional, invoked after every successful tick
 }
@@ -39,8 +41,8 @@ func Run(ctx context.Context, cfg Config, client *conductor.Client, s store.Stor
 				logger.V(2).Error(err, "poll tick failed")
 				s.MarkStale(cfg.AppName)
 				backoff *= 2
-				if backoff > cfg.MaxBackoff {
-					backoff = cfg.MaxBackoff
+				if backoff > maxBackoff {
+					backoff = maxBackoff
 				}
 			} else {
 				backoff = cfg.Interval

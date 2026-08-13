@@ -18,7 +18,6 @@ data:
       {{- end }}
     poller:
       interval: {{ .Values.config.pollerInterval | quote }}
-      maxBackoff: {{ .Values.config.pollerMaxBackoff | quote }}
     http:
       listen: ":8080"
     kubernetes:

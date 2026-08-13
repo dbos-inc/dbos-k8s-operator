@@ -85,7 +85,6 @@ func main() {
 		Namespace:         cfg.Kubernetes.Namespace,
 		ReconcileInterval: cfg.Kubernetes.ReconcileInterval.Native(),
 		PollInterval:      cfg.Poller.Interval.Native(),
-		PollMaxBackoff:    cfg.Poller.MaxBackoff.Native(),
 	})
 	wg.Add(1)
 	go func() {

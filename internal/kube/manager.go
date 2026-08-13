@@ -39,7 +39,6 @@ type Options struct {
 
 	ReconcileInterval time.Duration
 	PollInterval      time.Duration
-	PollMaxBackoff    time.Duration
 }
 
 type Manager struct {
@@ -258,9 +257,8 @@ func (m *Manager) ensurePoller(ctx context.Context, cr *unstructured.Unstructure
 	namespace, name, app := cr.GetNamespace(), cr.GetName(), appName(cr)
 	logger.Info("starting poller", "app", key, "conductorApp", app)
 	cfg := poller.Config{
-		AppName:    app,
-		Interval:   m.opts.PollInterval,
-		MaxBackoff: m.opts.PollMaxBackoff,
+		AppName:  app,
+		Interval: m.opts.PollInterval,
 		OnResult: func(r store.Result) {
 			m.updateStatus(pollCtx, namespace, name, key, r, logger)
 		},
